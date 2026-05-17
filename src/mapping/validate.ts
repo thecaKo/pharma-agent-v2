@@ -1,0 +1,72 @@
+import type { ConfigValidationIssue } from "../config/types.js";
+import type { MappingConfig, ValidatedMappingConfig } from "./types.js";
+
+const REQUIRED_FIELDS = ["sourceProductCode", "name", "price", "stock"] as const;
+const CURSOR_TYPES = new Set(["timestamp", "number"]);
+
+export class MappingValidationError extends Error {
+  public readonly issues: ConfigValidationIssue[];
+
+  public constructor(issues: ConfigValidationIssue[]) {
+    super(`Invalid mapping configuration: ${issues.map((issue) => `${issue.field} ${issue.message}`).join("; ")}`);
+    this.name = "MappingValidationError";
+    this.issues = issues;
+  }
+}
+
+export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingConfig {
+  const issues: ConfigValidationIssue[] = [];
+
+  requireString(mapping.mappingVersion, "mappingVersion", issues);
+  requirePositiveInteger(mapping.pollIntervalMs, "pollIntervalMs", issues);
+  requirePositiveInteger(mapping.batchSize, "batchSize", issues);
+  requireString(mapping.incrementalQuery, "incrementalQuery", issues);
+  requireString(mapping.cursorField, "cursorField", issues);
+
+  if (!mapping.cursorType || !CURSOR_TYPES.has(mapping.cursorType)) {
+    issues.push({ field: "cursorType", message: "must be timestamp or number" });
+  }
+
+  for (const field of REQUIRED_FIELDS) {
+    requireString(mapping.fields?.[field], `fields.${field}`, issues);
+  }
+
+  if (issues.length > 0) {
+    throw new MappingValidationError(issues);
+  }
+
+  return {
+    mappingVersion: mapping.mappingVersion?.trim() as string,
+    pollIntervalMs: mapping.pollIntervalMs as number,
+    batchSize: mapping.batchSize as number,
+    incrementalQuery: mapping.incrementalQuery?.trim() as string,
+    cursorField: mapping.cursorField?.trim() as string,
+    cursorType: mapping.cursorType as "timestamp" | "number",
+    fields: {
+      sourceProductCode: mapping.fields?.sourceProductCode?.trim() as string,
+      name: mapping.fields?.name?.trim() as string,
+      price: mapping.fields?.price?.trim() as string,
+      stock: mapping.fields?.stock?.trim() as string,
+      barcode: normalizeOptionalMapping(mapping.fields?.barcode),
+      active: normalizeOptionalMapping(mapping.fields?.active),
+      sourceUpdatedAt: normalizeOptionalMapping(mapping.fields?.sourceUpdatedAt)
+    }
+  };
+}
+
+function requireString(value: string | undefined, field: string, issues: ConfigValidationIssue[]): void {
+  if (!value?.trim()) {
+    issues.push({ field, message: "is required" });
+  }
+}
+
+function requirePositiveInteger(value: number | undefined, field: string, issues: ConfigValidationIssue[]): void {
+  if (!Number.isInteger(value) || (value ?? 0) <= 0) {
+    issues.push({ field, message: "must be a positive integer" });
+  }
+}
+
+function normalizeOptionalMapping(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}

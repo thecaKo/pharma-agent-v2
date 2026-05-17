@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+.agents/
+.claude/
+.compozy/
+.env
