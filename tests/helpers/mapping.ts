@@ -1,5 +1,29 @@
 import type { MappingConfig } from "../../src/mapping/types.js";
 
+export interface ProductionConnectorConfigOptions {
+  connectorId?: string;
+  customerId?: string;
+  sentAt?: string;
+  mapping?: Partial<MappingConfig>;
+}
+
+export function productionConnectorConfig(
+  options: ProductionConnectorConfigOptions = {}
+): Record<string, unknown> {
+  const mapping = validMapping({
+    selectedProductTable: "products",
+    ...options.mapping
+  });
+
+  return {
+    type: "connector.config",
+    connectorId: options.connectorId ?? "connector-1",
+    customerId: options.customerId ?? "customer-1",
+    sentAt: options.sentAt ?? "2026-05-20T12:00:00.000Z",
+    mapping
+  };
+}
+
 export function validMapping(overrides: Partial<MappingConfig> = {}): MappingConfig {
   return {
     mappingVersion: "mapping-v1",

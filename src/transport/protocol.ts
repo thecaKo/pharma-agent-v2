@@ -1,6 +1,7 @@
 import type { ValidatedMappingConfig } from "../mapping/types.js";
 import type { ProductChangeBatch } from "../poller/batch-builder.js";
 import { redactString } from "../logging/redact.js";
+import { normalizeCatalogConfigPushMessage } from "./catalog-config-push.js";
 
 export type ServerMessageType = "connector.config" | "batch.ack" | "config.updated" | "admin.request";
 export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response";
@@ -72,8 +73,18 @@ export interface ConnectorErrorPayload {
   batchId?: string;
 }
 
+export const UNSUPPORTED_SERVER_COMMAND_ERROR_CODE = "UNSUPPORTED_SERVER_COMMAND";
+export const CONFIG_VALIDATION_FAILED_ERROR_CODE = "CONFIG_VALIDATION_FAILED";
+
+export interface SafeConfigPushIdentity {
+  connectorId?: string;
+  customerId?: string;
+  mappingVersion?: string;
+}
+
 export interface ConnectorErrorMessage {
   type: "connector.error";
+  id?: string;
   sentAt: string;
   error: ConnectorErrorPayload;
 }
@@ -209,9 +220,10 @@ export function buildProductBatchMessage(batch: ProductChangeBatch, sentAt = new
 
 export function buildConnectorErrorMessage(
   input: ConnectorErrorPayload,
-  sentAt = new Date().toISOString()
+  sentAt = new Date().toISOString(),
+  correlationId?: string
 ): ConnectorErrorMessage {
-  return {
+  const message: ConnectorErrorMessage = {
     type: "connector.error",
     sentAt,
     error: {
@@ -223,6 +235,71 @@ export function buildConnectorErrorMessage(
       batchId: input.batchId
     }
   };
+
+  if (correlationId) {
+    message.id = correlationId;
+  }
+
+  return message;
+}
+
+export function buildUnsupportedServerCommandRejection(
+  input: { messageType: string; correlationId: string },
+  sentAt = new Date().toISOString()
+): ConnectorErrorMessage {
+  return buildConnectorErrorMessage(
+    {
+      errorCode: UNSUPPORTED_SERVER_COMMAND_ERROR_CODE,
+      message: `Unsupported server message type: ${input.messageType}`
+    },
+    sentAt,
+    input.correlationId
+  );
+}
+
+export function extractSafeConfigPushIdentity(message: Record<string, unknown>): SafeConfigPushIdentity {
+  const normalized = normalizeCatalogConfigPushMessage(message);
+  const identity: SafeConfigPushIdentity = {};
+  const connectorId = extractSafeNonEmptyString(normalized.connectorId);
+  const customerId = extractSafeNonEmptyString(normalized.customerId);
+
+  if (connectorId) {
+    identity.connectorId = connectorId;
+  }
+  if (customerId) {
+    identity.customerId = customerId;
+  }
+
+  const mapping = normalized.mapping;
+  if (typeof mapping === "object" && mapping !== null && !Array.isArray(mapping)) {
+    const mappingVersion = extractSafeNonEmptyString((mapping as Record<string, unknown>).mappingVersion);
+    if (mappingVersion) {
+      identity.mappingVersion = mappingVersion;
+    }
+  }
+
+  return identity;
+}
+
+export function buildConfigValidationConnectorError(
+  input: { parseError: Error; identity?: SafeConfigPushIdentity },
+  sentAt = new Date().toISOString()
+): ConnectorErrorMessage {
+  const message =
+    input.parseError instanceof ProtocolParseError
+      ? input.parseError.message
+      : "Invalid connector.config message";
+
+  return buildConnectorErrorMessage(
+    {
+      errorCode: CONFIG_VALIDATION_FAILED_ERROR_CODE,
+      message,
+      connectorId: input.identity?.connectorId,
+      customerId: input.identity?.customerId,
+      mappingVersion: input.identity?.mappingVersion
+    },
+    sentAt
+  );
 }
 
 export function buildAdminSuccessResponseMessage(
@@ -269,12 +346,13 @@ export function buildAdminErrorResponseMessage(
 }
 
 function parseConnectorConfig(message: Record<string, unknown>): ConnectorConfigMessage {
+  const normalized = normalizeCatalogConfigPushMessage(message);
   return {
     type: "connector.config",
-    connectorId: expectString(message.connectorId, "connectorId"),
-    customerId: expectString(message.customerId, "customerId"),
-    mapping: parseMapping(message.mapping),
-    sentAt: optionalString(message.sentAt, "sentAt")
+    connectorId: expectString(normalized.connectorId, "connectorId"),
+    customerId: expectString(normalized.customerId, "customerId"),
+    mapping: parseMapping(normalized.mapping),
+    sentAt: optionalString(normalized.sentAt, "sentAt")
   };
 }
 
@@ -349,7 +427,9 @@ function parseMapping(value: unknown): ValidatedMappingConfig {
 function parseCursorType(value: unknown): "timestamp" | "number" {
   const cursorType = expectString(value, "mapping.cursorType");
   if (cursorType !== "timestamp" && cursorType !== "number") {
-    throw new ProtocolParseError("mapping.cursorType must be timestamp or number");
+    throw new ProtocolParseError(
+      `mapping.cursorType must be "timestamp" or "number", got "${cursorType}"`
+    );
   }
   return cursorType;
 }
@@ -414,11 +494,10 @@ function expectBoolean(value: unknown, field: string): boolean {
 }
 
 function expectPositiveInteger(value: unknown, field: string): number {
-  const parsed = expectNonNegativeInteger(value, field);
-  if (parsed <= 0) {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
     throw new ProtocolParseError(`${field} must be a positive integer`);
   }
-  return parsed;
+  return value as number;
 }
 
 function expectNonNegativeInteger(value: unknown, field: string): number {
@@ -426,4 +505,11 @@ function expectNonNegativeInteger(value: unknown, field: string): number {
     throw new ProtocolParseError(`${field} must be a non-negative integer`);
   }
   return value as number;
+}
+
+function extractSafeNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  return value;
 }

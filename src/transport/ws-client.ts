@@ -1,14 +1,20 @@
 import { EventEmitter } from "node:events";
 import WebSocket, { type RawData } from "ws";
 import type { Logger } from "../logging/logger.js";
+import { redactString } from "../logging/redact.js";
 import type { ProductChangeBatch } from "../poller/batch-builder.js";
 import { buildHeartbeatMessage, type BuildHeartbeatInput } from "./heartbeat.js";
 import {
+  buildConfigValidationConnectorError,
   buildConnectorErrorMessage,
   buildProductBatchMessage,
+  buildUnsupportedServerCommandRejection,
+  CONFIG_VALIDATION_FAILED_ERROR_CODE,
+  extractSafeConfigPushIdentity,
   parseServerMessage,
   ProtocolParseError,
   serializeConnectorMessage,
+  UNSUPPORTED_SERVER_COMMAND_ERROR_CODE,
   type BatchAckMessage,
   type AdminRequestMessage,
   type AdminResponseMessage,
@@ -17,6 +23,32 @@ import {
   type ConnectorErrorPayload,
   type ServerMessage
 } from "./protocol.js";
+import {
+  buildCatalogMappingPreviewStubResult,
+  serializeCatalogMappingPreviewResult
+} from "./mapping-preview.js";
+import {
+  buildSetupConfigFailureResult,
+  CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
+  extractSetupConfigSecrets,
+  serializeConnectorSetupConfigResult,
+  SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE,
+  type ConnectorSetupConfigCommand,
+  type ConnectorSetupConfigResultMessage
+} from "./connector-setup-ws.js";
+import { serializeFileDiscoveryScanResult, type FileDiscoveryScanResultMessage } from "./file-discovery-ws.js";
+import {
+  buildSchemaTablesListResult,
+  serializeSchemaTablesListResult,
+  type SchemaDiscoveryRequest,
+  type SchemaDiscoveryTable
+} from "./schema-discovery.js";
+import {
+  dispatchExtensionMessage,
+  dispatchServerMessage,
+  parseServerMessageEnvelope,
+  type ServerMessageEnvelope
+} from "./server-message-router.js";
 import { calculateReconnectDelay, type RetryPolicyOptions } from "./retry-policy.js";
 
 export interface WebSocketTransportClientOptions {
@@ -57,7 +89,10 @@ export type WebSocketTransportEvent =
   | "batchAck"
   | "retry"
   | "reloadConfig"
-  | "adminRequest";
+  | "adminRequest"
+  | "schemaDiscoveryRequest"
+  | "fileDiscoveryScanRequest"
+  | "setupConfigRequest";
 
 const DEFAULT_RETRY_POLICY: RetryPolicyOptions = {
   baseDelayMs: 500,
@@ -92,6 +127,12 @@ export class WebSocketTransportClient extends EventEmitter {
   public override on(event: "retry", listener: (message: BatchAckMessage) => void): this;
   public override on(event: "reloadConfig", listener: (message: BatchAckMessage | ConfigUpdatedMessage) => void): this;
   public override on(event: "adminRequest", listener: (message: AdminRequestMessage) => void): this;
+  public override on(event: "schemaDiscoveryRequest", listener: (request: SchemaDiscoveryRequest) => void): this;
+  public override on(
+    event: "fileDiscoveryScanRequest",
+    listener: (request: { correlationId: string; rootPath?: string }) => void
+  ): this;
+  public override on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
   public override on(event: WebSocketTransportEvent, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -173,6 +214,49 @@ export class WebSocketTransportClient extends EventEmitter {
     });
   }
 
+  public sendSchemaTablesListResult(input: { correlationId: string; tables: readonly SchemaDiscoveryTable[] }): void {
+    const message = buildSchemaTablesListResult(input);
+    this.sendRaw(serializeSchemaTablesListResult(message));
+    this.logger.info("schema.discovery.sent", {
+      correlationId: message.id,
+      responseFormat: "legacy",
+      tableCount: message.tables.length
+    });
+  }
+
+  public sendCatalogMappingPreviewResult(input: { correlationId: string }): void {
+    const message = buildCatalogMappingPreviewStubResult(input.correlationId);
+    this.sendRaw(serializeCatalogMappingPreviewResult(message));
+    this.logger.info("preview.not_implemented", {
+      correlationId: message.id,
+      sampleCount: message.summary.sampleCount
+    });
+  }
+
+  public sendFileDiscoveryScanResult(message: FileDiscoveryScanResultMessage): void {
+    this.sendRaw(serializeFileDiscoveryScanResult(message));
+    this.logger.info(message.failureReason ? "file.discovery.failure_sent" : "file.discovery.sent", {
+      correlationId: message.id,
+      ...(message.failureReason ? { failureReason: message.failureReason } : {}),
+      entryCount: message.failureReason ? undefined : message.entries.length
+    });
+  }
+
+  public sendConnectorSetupConfigResult(message: ConnectorSetupConfigResultMessage): void {
+    this.sendRaw(serializeConnectorSetupConfigResult(message));
+    this.logger.info(message.ok ? "setup.config.applied" : "setup.config.failed", {
+      correlationId: message.id,
+      setupMethod: message.setupMethod,
+      driver: message.driver,
+      ...(message.ok
+        ? {}
+        : {
+            errorCode: message.errorCode,
+            message: message.message
+          })
+    });
+  }
+
   private async openSocket(): Promise<void> {
     this.logger.info("websocket connecting", { url: this.url });
 
@@ -222,14 +306,28 @@ export class WebSocketTransportClient extends EventEmitter {
   }
 
   private handleMessage(data: RawData): void {
+    dispatchServerMessage(data, {
+      onMalformed: (error) => this.logProtocolParseError(error),
+      onCore: (raw) => this.handleCoreMessage(raw),
+      onExtension: (envelope, raw) => this.handleExtensionMessage(envelope, raw),
+      onUnsupported: (envelope) => this.handleUnsupportedMessage(envelope)
+    });
+  }
+
+  private handleCoreMessage(raw: RawData): void {
     let message: ServerMessage;
     try {
-      message = parseServerMessage(data);
+      message = parseServerMessage(raw);
     } catch (error) {
-      this.logger.warn("websocket malformed message", {
-        errorCode: "PROTOCOL_PARSE_ERROR",
-        message: error instanceof ProtocolParseError ? error.message : "Unknown protocol parse error"
-      });
+      const envelopeResult = parseServerMessageEnvelope(raw);
+      if (
+        envelopeResult.classification !== "malformed" &&
+        envelopeResult.envelope.type === "connector.config"
+      ) {
+        this.respondToMalformedConfigPush(error, envelopeResult.envelope.message);
+        return;
+      }
+      this.logProtocolParseError(error);
       return;
     }
 
@@ -272,15 +370,143 @@ export class WebSocketTransportClient extends EventEmitter {
           command: message.command
         });
         this.emit("adminRequest", message);
+        this.emit("schemaDiscoveryRequest", {
+          responseFormat: "admin",
+          correlationId: message.requestId,
+          command: message.command
+        } satisfies SchemaDiscoveryRequest);
         return;
     }
   }
 
+  private handleUnsupportedMessage(envelope: ServerMessageEnvelope): void {
+    this.logger.warn("unsupported_server_message", {
+      type: envelope.type,
+      ...(envelope.id !== undefined ? { id: envelope.id } : {})
+    });
+
+    if (!envelope.id) {
+      return;
+    }
+
+    const message = buildUnsupportedServerCommandRejection({
+      messageType: envelope.type,
+      correlationId: envelope.id
+    });
+    this.send(message);
+    this.logger.warn("connector error sent", {
+      event: "connector.error",
+      errorCode: UNSUPPORTED_SERVER_COMMAND_ERROR_CODE,
+      correlationId: envelope.id,
+      messageType: envelope.type
+    });
+  }
+
+  private handleExtensionMessage(envelope: ServerMessageEnvelope, raw: RawData): void {
+    const result = dispatchExtensionMessage(envelope, raw);
+
+    switch (result.kind) {
+      case "schemaDiscoveryRequest":
+        this.logger.info("schema.discovery.received", {
+          correlationId: result.request.correlationId
+        });
+        this.emit("schemaDiscoveryRequest", result.request satisfies SchemaDiscoveryRequest);
+        return;
+      case "catalogMappingPreviewStub":
+        this.sendCatalogMappingPreviewResult({ correlationId: result.correlationId });
+        return;
+      case "fileDiscoveryScanRequest":
+        this.emit("fileDiscoveryScanRequest", {
+          correlationId: result.correlationId,
+          ...(result.rootPath !== undefined ? { rootPath: result.rootPath } : {})
+        });
+        return;
+      case "setupConfigRequest":
+        this.logger.info("setup.config.received", {
+          correlationId: result.request.correlationId,
+          setupMethod: result.request.setupMethod,
+          driver: result.request.driver
+        });
+        this.emit("setupConfigRequest", result.request);
+        return;
+      case "malformed":
+        if (envelope.type === CONNECTOR_SETUP_CONFIG_COMMAND_TYPE && envelope.id) {
+          this.respondToMalformedSetupConfig(result.error, envelope);
+          return;
+        }
+        this.logProtocolParseError(result.error);
+        return;
+      case "handled":
+        return;
+    }
+  }
+
+  private respondToMalformedSetupConfig(error: unknown, envelope: ServerMessageEnvelope): void {
+    const correlationId = envelope.id;
+    if (!correlationId) {
+      this.logProtocolParseError(error);
+      return;
+    }
+
+    const message =
+      error instanceof Error ? error.message : "Invalid connector.setup.config message";
+    const secrets = [
+      this.connectorToken,
+      ...extractSetupConfigSecrets(envelope.message)
+    ];
+    const result = buildSetupConfigFailureResult(correlationId, {
+      errorCode: SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE,
+      message: redactString(message, secrets)
+    });
+
+    try {
+      this.sendConnectorSetupConfigResult(result);
+      this.logger.warn("setup.config.validation_failed", {
+        correlationId,
+        errorCode: SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE
+      });
+    } catch {
+      this.logProtocolParseError(error);
+    }
+  }
+
+  private respondToMalformedConfigPush(error: unknown, messageRecord: Record<string, unknown>): void {
+    const connectorError = buildConfigValidationConnectorError({
+      parseError: error instanceof Error ? error : new ProtocolParseError("Invalid connector.config message"),
+      identity: extractSafeConfigPushIdentity(messageRecord)
+    });
+    connectorError.error.message = redactString(connectorError.error.message, [this.connectorToken]);
+
+    try {
+      this.send(connectorError);
+      this.logger.warn("connector error sent", {
+        event: "connector.error",
+        errorCode: CONFIG_VALIDATION_FAILED_ERROR_CODE,
+        connectorId: connectorError.error.connectorId,
+        customerId: connectorError.error.customerId,
+        mappingVersion: connectorError.error.mappingVersion
+      });
+    } catch {
+      this.logProtocolParseError(error);
+    }
+  }
+
+  private logProtocolParseError(error: unknown): void {
+    this.logger.warn("websocket malformed message", {
+      errorCode: "PROTOCOL_PARSE_ERROR",
+      message: error instanceof ProtocolParseError ? error.message : "Unknown protocol parse error"
+    });
+  }
+
   private send(message: Parameters<typeof serializeConnectorMessage>[0]): void {
+    this.sendRaw(serializeConnectorMessage(message));
+  }
+
+  private sendRaw(payload: string): void {
     if (!this.socket || this.socket.readyState !== this.socket.OPEN) {
       throw new Error("WebSocket is not connected");
     }
-    this.socket.send(serializeConnectorMessage(message));
+    this.socket.send(payload);
   }
 
   private scheduleReconnect(): void {

@@ -1,7 +1,7 @@
+import path from "node:path";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import { configSecrets, loadConfig, type Environment } from "../config/env.js";
-import type { ConnectorConfig } from "../config/types.js";
+import type { ConnectorConfig, DatabaseConfig } from "../config/types.js";
 import {
   createSourceDatabaseAdapter,
   type AdapterFactoryDependencies
@@ -9,6 +9,7 @@ import {
 import { attachFirebirdConnection } from "../db/firebird-driver.js";
 import type { SourceDatabaseAdapter } from "../db/source-adapter.js";
 import { createLogger, type Logger } from "../logging/logger.js";
+import { redactString } from "../logging/redact.js";
 import type { ValidatedMappingConfig } from "../mapping/types.js";
 import { validateMappingConfig } from "../mapping/validate.js";
 import { IncrementalPoller } from "../poller/incremental-poller.js";
@@ -17,13 +18,33 @@ import { StateStore } from "../state/state-store.js";
 import { STATE_FILE_NAME, type ConnectorState } from "../state/state-types.js";
 import type {
   BatchAckMessage,
-  AdminRequestMessage,
   AdminResponseMessage,
   ConfigUpdatedMessage,
   ConnectorConfigMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
 import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage } from "../transport/protocol.js";
+import {
+  buildSetupConfigFailureResult,
+  buildSetupConfigSuccessResult,
+  SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE,
+  SETUP_CONNECTION_FAILED_ERROR_CODE,
+  setupConfigToDatabaseConfig,
+  type ConnectorSetupConfigCommand,
+  type ConnectorSetupConfigResultMessage
+} from "../transport/connector-setup-ws.js";
+import {
+  buildFileDiscoveryScanFailureResult,
+  buildFileDiscoveryScanSuccessResult,
+  scanLocalFilesystem,
+  type FileDiscoveryScanResultMessage
+} from "../transport/file-discovery-ws.js";
+import {
+  normalizeSchemaDiscoveryColumns,
+  SCHEMA_DISCOVERY_MAX_TABLE_COUNT,
+  type SchemaDiscoveryRequest,
+  type SchemaDiscoveryTable
+} from "../transport/schema-discovery.js";
 import { WebSocketTransportClient } from "../transport/ws-client.js";
 import { CONNECTOR_VERSION } from "../version.js";
 
@@ -33,7 +54,12 @@ export interface RuntimeTransport {
   on(event: "config", listener: (message: ConnectorConfigMessage) => void): this;
   on(event: "batchAck", listener: (message: BatchAckMessage) => void): this;
   on(event: "reloadConfig", listener: (message: BatchAckMessage | ConfigUpdatedMessage) => void): this;
-  on(event: "adminRequest", listener: (message: AdminRequestMessage) => void): this;
+  on(event: "schemaDiscoveryRequest", listener: (request: SchemaDiscoveryRequest) => void): this;
+  on(
+    event: "fileDiscoveryScanRequest",
+    listener: (request: { correlationId: string; rootPath?: string }) => void
+  ): this;
+  on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
   connect(): Promise<void>;
   close(): Promise<void>;
   isConnected(): boolean;
@@ -47,6 +73,9 @@ export interface RuntimeTransport {
   }): void;
   sendConnectorError(input: ConnectorErrorPayload, sentAt?: string): void;
   sendAdminResponse(message: AdminResponseMessage): void;
+  sendSchemaTablesListResult(input: { correlationId: string; tables: readonly SchemaDiscoveryTable[] }): void;
+  sendFileDiscoveryScanResult(message: FileDiscoveryScanResultMessage): void;
+  sendConnectorSetupConfigResult(message: ConnectorSetupConfigResultMessage): void;
   getReconnectAttemptCount(): number;
 }
 
@@ -84,7 +113,8 @@ export class ConnectorRuntime {
   private readonly config: ConnectorConfig;
   private readonly logger: Logger;
   private readonly stateStore: StateStore;
-  private readonly adapter: SourceDatabaseAdapter;
+  private adapter: SourceDatabaseAdapter;
+  private readonly adapterDependencies: AdapterFactoryDependencies;
   private readonly transport: RuntimeTransport;
   private readonly timers: RuntimeTimers;
   private readonly now: () => string;
@@ -114,11 +144,12 @@ export class ConnectorRuntime {
       new StateStore({
         stateFilePath: options.stateFilePath ?? defaultStateFilePath()
       });
+    this.adapterDependencies = options.adapterDependencies ?? createOptionalDriverDependencies();
     this.adapter =
       options.adapter ??
       createSourceDatabaseAdapter({
         config: this.config.database,
-        dependencies: options.adapterDependencies ?? createOptionalDriverDependencies(),
+        dependencies: this.adapterDependencies,
         secrets: configSecrets(this.config)
       });
     this.transport =
@@ -205,8 +236,16 @@ export class ConnectorRuntime {
     this.transport.on("reloadConfig", () => {
       this.pausePolling("config reload requested");
     });
-    this.transport.on("adminRequest", (message) => {
-      this.handleAdminRequest(message).catch((error) => this.handleRuntimeError("ADMIN_REQUEST_FAILED", error));
+    this.transport.on("schemaDiscoveryRequest", (request) => {
+      this.handleSchemaDiscovery(request).catch((error) => this.handleRuntimeError("ADMIN_REQUEST_FAILED", error));
+    });
+    this.transport.on("fileDiscoveryScanRequest", (request) => {
+      this.handleFileDiscoveryScan(request).catch((error) => this.handleRuntimeError("FILE_DISCOVERY_FAILED", error));
+    });
+    this.transport.on("setupConfigRequest", (request) => {
+      this.handleSetupConfig(request).catch((error) =>
+        this.handleRuntimeError("SETUP_CONFIG_FAILED", error)
+      );
     });
   }
 
@@ -259,44 +298,63 @@ export class ConnectorRuntime {
     this.scheduleNextPoll(0);
   }
 
-  private async handleAdminRequest(message: AdminRequestMessage): Promise<void> {
+  private async handleSchemaDiscovery(request: SchemaDiscoveryRequest): Promise<void> {
     const identity = this.activeStateIdentity();
-    this.logger.info("admin.request.received", {
-      requestId: message.requestId,
-      command: message.command,
+    const correlationId = request.correlationId;
+    const command = request.responseFormat === "admin" ? request.command : "schema.listTables";
+
+    this.logger.info("schema.discovery.received", {
+      correlationId,
+      responseFormat: request.responseFormat,
+      command,
       connectorId: identity.connectorId,
       customerId: identity.customerId
     });
 
     try {
-      await this.ensureAdapterConnected();
-      const tables = await this.adapter.listTables();
-      const tableNames = tables.map((table) => table.name);
+      const snapshot = await this.discoverSchemaSnapshot();
+      if (request.responseFormat === "legacy") {
+        this.transport.sendSchemaTablesListResult({
+          correlationId,
+          tables: snapshot
+        });
+        return;
+      }
+
       const response = buildAdminSuccessResponseMessage(
         {
-          requestId: message.requestId,
-          command: message.command,
-          tables: tableNames
+          requestId: correlationId,
+          command,
+          tables: snapshot.map((table) => table.name)
         },
         this.now()
       );
-
       this.transport.sendAdminResponse(response);
       this.logger.info("admin.response.sent", {
         requestId: response.requestId,
         command: response.command,
         ok: response.ok,
-        tableCount: tableNames.length
+        tableCount: snapshot.length
       });
     } catch (error) {
       const errorInput = {
         errorCode: "TABLE_DISCOVERY_FAILED",
         message: error instanceof Error ? error.message : String(error)
       };
+
+      if (request.responseFormat === "legacy") {
+        this.logger.warn("schema.discovery.failed", {
+          correlationId,
+          errorCode: errorInput.errorCode,
+          message: errorInput.message
+        });
+        return;
+      }
+
       const response = buildAdminErrorResponseMessage(
         {
-          requestId: message.requestId,
-          command: message.command,
+          requestId: correlationId,
+          command,
           errorCode: errorInput.errorCode,
           message: errorInput.message,
           secrets: configSecrets(this.config)
@@ -305,8 +363,8 @@ export class ConnectorRuntime {
       );
 
       this.logger.warn("admin.request.failed", {
-        requestId: message.requestId,
-        command: message.command,
+        requestId: correlationId,
+        command,
         errorCode: errorInput.errorCode,
         message: response.ok ? undefined : response.error.message
       });
@@ -319,6 +377,141 @@ export class ConnectorRuntime {
         tableCount: undefined
       });
     }
+  }
+
+  private async handleSetupConfig(request: ConnectorSetupConfigCommand): Promise<void> {
+    const correlationId = request.correlationId;
+
+    this.pausePolling("database setup reload");
+    await this.pendingPoll?.catch(() => undefined);
+
+    let databaseConfig: DatabaseConfig;
+    try {
+      databaseConfig = setupConfigToDatabaseConfig(request);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.transport.sendConnectorSetupConfigResult(
+        buildSetupConfigFailureResult(correlationId, {
+          errorCode: SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE,
+          message
+        })
+      );
+      return;
+    }
+
+    const secrets = configSecrets({
+      ...this.config,
+      database: databaseConfig
+    });
+    const candidateAdapter = createSourceDatabaseAdapter({
+      config: databaseConfig,
+      dependencies: this.adapterDependencies,
+      secrets
+    });
+
+    try {
+      await candidateAdapter.connect();
+    } catch (error) {
+      await candidateAdapter.close().catch(() => undefined);
+      const message = redactString(
+        error instanceof Error ? error.message : String(error),
+        secrets
+      );
+      this.transport.sendConnectorSetupConfigResult(
+        buildSetupConfigFailureResult(correlationId, {
+          errorCode: SETUP_CONNECTION_FAILED_ERROR_CODE,
+          message
+        })
+      );
+      this.logger.warn("setup.config.connection_failed", {
+        correlationId,
+        setupMethod: request.setupMethod,
+        driver: request.driver,
+        message
+      });
+      return;
+    }
+
+    const previousAdapter = this.adapter;
+    this.adapter = candidateAdapter;
+    this.adapterConnected = true;
+    await previousAdapter.close().catch(() => undefined);
+
+    if (this.activeMapping && this.poller) {
+      this.poller = new IncrementalPoller({
+        adapter: this.adapter,
+        mapping: this.activeMapping,
+        state: this.stateStore,
+        connectorId: this.activeConnectorId ?? this.inFlightBatch?.connectorId ?? "",
+        customerId: this.activeCustomerId ?? this.inFlightBatch?.customerId ?? "",
+        isTransportReady: () => this.transport.isConnected(),
+        hasUnacknowledgedBatch: () => this.inFlightBatch !== undefined,
+        logger: this.logger,
+        now: this.now
+      });
+    }
+
+    this.transport.sendConnectorSetupConfigResult(
+      buildSetupConfigSuccessResult(correlationId, request)
+    );
+    this.logger.info("setup.config.adapter_reloaded", {
+      correlationId,
+      setupMethod: request.setupMethod,
+      driver: request.driver,
+      dbHost: databaseConfig.host,
+      dbPort: databaseConfig.port,
+      dbName: databaseConfig.name,
+      dbUser: databaseConfig.user
+    });
+  }
+
+  private async handleFileDiscoveryScan(request: { correlationId: string; rootPath?: string }): Promise<void> {
+    const correlationId = request.correlationId;
+    const identity = this.activeStateIdentity();
+
+    this.logger.info("file.discovery.received", {
+      correlationId,
+      connectorId: identity.connectorId,
+      customerId: identity.customerId
+    });
+
+    const rawRoot =
+      typeof request.rootPath === "string" ? request.rootPath.trim() : "";
+    const workspace = rawRoot.length > 0 ? path.resolve(rawRoot) : process.cwd();
+
+    const scan = await scanLocalFilesystem(workspace);
+
+    const message = scan.ok
+      ? buildFileDiscoveryScanSuccessResult(correlationId, scan.entries)
+      : buildFileDiscoveryScanFailureResult(correlationId, scan.failureReason);
+
+    this.transport.sendFileDiscoveryScanResult(message);
+  }
+
+  private async discoverSchemaSnapshot(): Promise<SchemaDiscoveryTable[]> {
+    await this.ensureAdapterConnected();
+    const tables = await this.adapter.listTables();
+    const limitedTables =
+      tables.length > SCHEMA_DISCOVERY_MAX_TABLE_COUNT ? tables.slice(0, SCHEMA_DISCOVERY_MAX_TABLE_COUNT) : tables;
+
+    if (tables.length > SCHEMA_DISCOVERY_MAX_TABLE_COUNT) {
+      this.logger.warn("schema.discovery.truncated", {
+        field: "tables",
+        totalCount: tables.length,
+        returnedCount: limitedTables.length
+      });
+    }
+
+    const snapshot: SchemaDiscoveryTable[] = [];
+    for (const table of limitedTables) {
+      const columns = await this.adapter.listColumns(table.name);
+      snapshot.push({
+        name: table.name,
+        columns: normalizeSchemaDiscoveryColumns(columns)
+      });
+    }
+
+    return snapshot.sort((left, right) => left.name.localeCompare(right.name));
   }
 
   private async handleBatchAck(message: BatchAckMessage): Promise<void> {
@@ -496,8 +689,8 @@ export async function startConnectorRuntime(options: ConnectorRuntimeOptions = {
 }
 
 export function defaultStateFilePath(programData = process.env.PROGRAMDATA): string {
-  const root = programData && programData.trim().length > 0 ? programData : join(homedir(), "AppData", "Local");
-  return join(root, "PharmaAgentConnector", STATE_FILE_NAME);
+  const root = programData && programData.trim().length > 0 ? programData : path.join(homedir(), "AppData", "Local");
+  return path.join(root, "PharmaAgentConnector", STATE_FILE_NAME);
 }
 
 function createOptionalDriverDependencies(): AdapterFactoryDependencies {

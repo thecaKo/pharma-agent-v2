@@ -37,7 +37,10 @@ export class MockWebSocketServer {
   }
 
   public sendJson(message: Record<string, unknown>): void {
-    const payload = JSON.stringify(message);
+    this.sendRaw(JSON.stringify(message));
+  }
+
+  public sendRaw(payload: string): void {
     for (const client of this.clients) {
       client.receive(payload);
     }
@@ -49,6 +52,10 @@ export class MockWebSocketServer {
       return message;
     }
     return new Promise((resolve) => this.messageWaiters.push(resolve));
+  }
+
+  public snapshotMessages(): readonly ReceivedClientMessage[] {
+    return [...this.receivedMessages];
   }
 
   public disconnectClients(): void {
