@@ -1,9 +1,45 @@
 export {
+  buildEnvBackupPath,
+  mergeConnectorEnvContent,
+  writeConnectorEnvFile,
+  type ConnectorEnvKey,
+  type ConnectorEnvValues,
+  type WriteConnectorEnvFileOptions,
+  type WriteConnectorEnvFileResult
+} from "./cli/env-file.js";
+export {
+  buildOnboardingMappingArtifact,
+  writeDatabaseSetupState,
+  type DatabaseSetupStateInput,
+  type OnboardingFieldMapping,
+  type OnboardingMappingArtifact
+} from "./cli/database-setup-state.js";
+export {
+  DEFAULT_ONBOARDING_ARTIFACT_POLL_INTERVAL_MS,
+  LOCAL_ONBOARDING_MAPPING_VERSION,
+  OnboardingArtifactError,
+  loadValidatedMappingFromOnboardingArtifactFile
+} from "./cli/onboarding-artifact-loader.js";
+export {
   ConfigValidationError,
+  CONNECTOR_ENV_KEYS,
+  REQUIRED_ENV,
   configSecrets,
   loadConfig,
   type Environment
 } from "./config/env.js";
+export {
+  CONNECTOR_CONFIG_FILE_NAME,
+  INSTALLER_CONFIG_DIR_NAME,
+  INSTALLER_MANAGED_CONFIG_KEYS,
+  ProgramDataConfigError,
+  defaultProgramDataConfigPath,
+  loadProgramDataConfig,
+  mergeInstallerConfigWithEnvironment,
+  type InstallerManagedConfig,
+  type InstallerManagedConfigKey,
+  type ProgramDataConfigLoadResult
+} from "./config/programdata-config.js";
 export type {
   ConfigValidationIssue,
   ConnectorConfig,
@@ -24,6 +60,24 @@ export {
   type NormalizeDatabaseErrorInput
 } from "./db/errors.js";
 export {
+  buildDatabaseSetupCandidateViews,
+  classifyDatabasePath,
+  compareDatabaseSetupCandidateViews,
+  compareDatabaseFileCandidates,
+  discoverDatabaseFiles,
+  formatDatabaseSetupCandidateView,
+  resolveDatabaseDiscoveryRoots,
+  sortDatabaseFileCandidates,
+  type DatabaseCandidateType,
+  type DatabaseDiscoveryConfidence,
+  type DatabaseFileCandidate,
+  type DatabaseFileDiscoveryOptions,
+  type DatabaseFileDiscoveryResult,
+  type DatabasePathKind,
+  type DatabasePathMetadata,
+  type DatabaseSetupCandidateView
+} from "./db/file-discovery.js";
+export {
   FirebirdSourceAdapter,
   type FirebirdConnectionConfig,
   type FirebirdConnectionFactory,
@@ -38,6 +92,8 @@ export {
   type MySqlSourceAdapterOptions
 } from "./db/mysql-adapter.js";
 export {
+  type DatabaseColumn,
+  type DatabaseTable,
   type QueryChangesInput,
   type SourceDatabaseAdapter,
   type SourceDatabaseAdapterKind
@@ -89,10 +145,19 @@ export { STATE_FILE_NAME, type ConnectorState, type CursorValue } from "./state/
 export { buildHeartbeatMessage, buildHeartbeatPayload, type BuildHeartbeatInput } from "./transport/heartbeat.js";
 export {
   buildConnectorErrorMessage,
+  buildAdminErrorResponseMessage,
+  buildAdminSuccessResponseMessage,
   buildProductBatchMessage,
   parseServerMessage,
   ProtocolParseError,
   serializeConnectorMessage,
+  type AdminCommand,
+  type AdminRequestMessage,
+  type AdminResponseErrorMessage,
+  type AdminResponseErrorPayload,
+  type AdminResponseMessage,
+  type AdminResponseSuccessMessage,
+  type AdminResponseSuccessPayload,
   type BatchAckMessage,
   type BatchNextAction,
   type ConfigUpdatedMessage,

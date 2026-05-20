@@ -1,7 +1,7 @@
 import type { DatabaseDriver } from "../config/types.js";
 import { redactString } from "../logging/redact.js";
 
-export type DatabaseOperation = "connect" | "query" | "close";
+export type DatabaseOperation = "connect" | "query" | "listTables" | "listColumns" | "close";
 
 export interface NormalizeDatabaseErrorInput {
   driver: DatabaseDriver;

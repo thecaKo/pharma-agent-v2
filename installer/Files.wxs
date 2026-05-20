@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <ComponentGroup Id="ConnectorApplicationFiles" Directory="INSTALLFOLDER">
+      <Component Id="ConnectorMainEntrypoint" Guid="D2E3F4A5-B6C7-4890-BCDE-F01234567890">
+        <File Id="ConnectorMainJs" Name="main.js" Source="$(var.StagingDir)\dist\main.js" KeyPath="yes" />
+      </Component>
+      <Component Id="ConnectorPackageManifest" Guid="E3F4A5B6-C7D8-4901-CDEF-012345678901">
+        <File Id="ConnectorPackageJson" Name="package.json" Source="$(var.StagingDir)\package.json" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

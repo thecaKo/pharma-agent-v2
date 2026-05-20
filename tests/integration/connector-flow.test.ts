@@ -58,7 +58,7 @@ describe("connector runtime flow", () => {
         connectorId: "connector-1",
         customerId: "customer-1",
         mappingVersion: "mapping-v1",
-        cursorBefore: null,
+        cursorBefore: "1970-01-01T00:00:00.000Z",
         cursorAfter: "2026-05-16T20:00:02.000Z"
       }
     });
@@ -117,6 +117,28 @@ describe("connector runtime flow", () => {
       sql: "select * from products where updated_at > ? order by updated_at",
       cursor: "2026-05-16T20:00:01.000Z",
       limit: 500
+    });
+  });
+
+  it("responds to a mock panel schema.listTables admin request with the correlated table list", async () => {
+    runtime = createRuntime({
+      adapter: adapterWithRows([], [{ name: "z_products" }, { name: "a_products" }])
+    });
+
+    await runtime.start();
+    server.sendJson({
+      type: "admin.request",
+      requestId: "request-123",
+      command: "schema.listTables"
+    });
+
+    const response = await nextAdminResponse(server);
+    expect(response.parsed).toMatchObject({
+      type: "admin.response",
+      requestId: "request-123",
+      command: "schema.listTables",
+      ok: true,
+      payload: { tables: ["a_products", "z_products"] }
     });
   });
 
@@ -181,11 +203,16 @@ describe("connector runtime flow", () => {
   }
 });
 
-function adapterWithRows(rows: Record<string, unknown>[]): SourceDatabaseAdapter {
+function adapterWithRows(
+  rows: Record<string, unknown>[],
+  tables: Array<{ name: string }> = [{ name: "products" }]
+): SourceDatabaseAdapter {
   return {
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
-    queryChanges: vi.fn(async () => rows)
+    queryChanges: vi.fn(async () => rows),
+    listTables: vi.fn(async () => tables),
+    listColumns: vi.fn(async () => [])
   };
 }
 
@@ -202,6 +229,15 @@ async function nextProductBatch(server: MockWebSocketServer) {
   while (true) {
     const message = await server.nextMessage();
     if (message.parsed.type === "product.batch") {
+      return message;
+    }
+  }
+}
+
+async function nextAdminResponse(server: MockWebSocketServer) {
+  while (true) {
+    const message = await server.nextMessage();
+    if (message.parsed.type === "admin.response") {
       return message;
     }
   }

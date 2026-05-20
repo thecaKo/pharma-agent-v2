@@ -13,3 +13,11 @@ export function validEnv(overrides: Environment = {}): Environment {
     ...overrides
   };
 }
+
+export function validDatabaseEnv(overrides: Environment = {}): Environment {
+  return validEnv({
+    CONNECTOR_TOKEN: undefined,
+    CONNECTOR_WS_URL: undefined,
+    ...overrides
+  });
+}

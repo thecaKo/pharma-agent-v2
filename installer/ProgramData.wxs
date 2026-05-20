@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <DirectoryRef Id="ProgramDataConnectorFolder">
+      <Component Id="ProgramDataConnectorConfig" Guid="F4A5B6C7-D8E9-4012-DEF0-123456789012">
+        <CreateFolder />
+        <RemoveFile Id="RemoveProgramDataConnectorConfig"
+                    Name="$(var.ProgramDataConfigFileName)"
+                    On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ProgramDataConfigScript" Guid="A5B6C7D8-E9F0-4123-EF01-234567890123">
+        <File Id="WriteProgramDataConfigScript"
+              Name="WriteProgramDataConfig.ps1"
+              Source="actions\WriteProgramDataConfig.ps1"
+              KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <SetProperty Id="WriteProgramDataConfigData"
+                 Value="TOKEN=[CONNECTOR_TOKEN];WSURL=[CONNECTOR_WS_URL]"
+                 After="CostFinalize"
+                 Sequence="execute"
+                 Condition="NOT Installed" />
+
+    <CustomAction Id="WriteProgramDataConfig"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]WriteProgramDataConfig.ps1&quot; -CustomActionData &quot;[WriteProgramDataConfigData]&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="WriteProgramDataConfig" After="InstallFiles" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

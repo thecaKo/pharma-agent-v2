@@ -1,9 +1,11 @@
 import type { ValidatedMappingConfig } from "../mapping/types.js";
 import type { ProductChangeBatch } from "../poller/batch-builder.js";
+import { redactString } from "../logging/redact.js";
 
-export type ServerMessageType = "connector.config" | "batch.ack" | "config.updated";
-export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error";
+export type ServerMessageType = "connector.config" | "batch.ack" | "config.updated" | "admin.request";
+export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response";
 export type BatchNextAction = "continue" | "retry" | "reload_config";
+export type AdminCommand = "schema.listTables";
 
 export interface ConnectorConfigMessage {
   type: "connector.config";
@@ -31,7 +33,14 @@ export interface ConfigUpdatedMessage {
   sentAt?: string;
 }
 
-export type ServerMessage = ConnectorConfigMessage | BatchAckMessage | ConfigUpdatedMessage;
+export interface AdminRequestMessage {
+  type: "admin.request";
+  requestId: string;
+  command: AdminCommand;
+  sentAt?: string;
+}
+
+export type ServerMessage = ConnectorConfigMessage | BatchAckMessage | ConfigUpdatedMessage | AdminRequestMessage;
 
 export interface HeartbeatPayload {
   connectorVersion: string;
@@ -69,7 +78,39 @@ export interface ConnectorErrorMessage {
   error: ConnectorErrorPayload;
 }
 
-export type ConnectorMessage = ConnectorHeartbeatMessage | ProductBatchMessage | ConnectorErrorMessage;
+export interface AdminResponseSuccessPayload {
+  tables: string[];
+}
+
+export interface AdminResponseErrorPayload {
+  errorCode: string;
+  message: string;
+}
+
+interface AdminResponseBaseMessage {
+  type: "admin.response";
+  requestId: string;
+  command: AdminCommand;
+  sentAt: string;
+}
+
+export interface AdminResponseSuccessMessage extends AdminResponseBaseMessage {
+  ok: true;
+  payload: AdminResponseSuccessPayload;
+}
+
+export interface AdminResponseErrorMessage extends AdminResponseBaseMessage {
+  ok: false;
+  error: AdminResponseErrorPayload;
+}
+
+export type AdminResponseMessage = AdminResponseSuccessMessage | AdminResponseErrorMessage;
+
+export type ConnectorMessage =
+  | ConnectorHeartbeatMessage
+  | ProductBatchMessage
+  | ConnectorErrorMessage
+  | AdminResponseMessage;
 
 export class ProtocolParseError extends Error {
   public constructor(message: string) {
@@ -90,12 +131,71 @@ export function parseServerMessage(raw: string | Buffer | ArrayBuffer | Buffer[]
       return parseBatchAck(message);
     case "config.updated":
       return parseConfigUpdated(message);
+    case "admin.request":
+      return parseAdminRequest(message);
     default:
       throw new ProtocolParseError(`Unsupported server message type: ${type}`);
   }
 }
 
 export function serializeConnectorMessage(message: ConnectorMessage): string {
+  return JSON.stringify(message);
+}
+
+export function parseAdminResponseMessage(raw: string | Buffer | ArrayBuffer | Buffer[]): AdminResponseMessage {
+  const value = parseJson(raw);
+  const message = expectRecord(value, "message");
+  const type = expectString(message.type, "type");
+  if (type !== "admin.response") {
+    throw new ProtocolParseError(`Unsupported connector message type: ${type}`);
+  }
+
+  const base = {
+    type: "admin.response" as const,
+    requestId: validateRequestId(expectString(message.requestId, "requestId")),
+    command: parseAdminCommand(message.command),
+    sentAt: expectString(message.sentAt, "sentAt")
+  };
+  const ok = expectBoolean(message.ok, "ok");
+
+  if (ok) {
+    const payload = expectRecord(message.payload, "payload");
+    return {
+      ...base,
+      ok,
+      payload: {
+        tables: expectStringArray(payload.tables, "payload.tables")
+      }
+    };
+  }
+
+  const error = expectRecord(message.error, "error");
+  return {
+    ...base,
+    ok,
+    error: {
+      errorCode: expectString(error.errorCode, "error.errorCode"),
+      message: expectString(error.message, "error.message")
+    }
+  };
+}
+
+export function buildAdminRequestMessage(
+  input: {
+    requestId: string;
+    command: AdminCommand;
+  },
+  sentAt = new Date().toISOString()
+): AdminRequestMessage {
+  return {
+    type: "admin.request",
+    requestId: validateRequestId(input.requestId),
+    command: input.command,
+    sentAt
+  };
+}
+
+export function serializeServerMessage(message: ServerMessage): string {
   return JSON.stringify(message);
 }
 
@@ -122,6 +222,49 @@ export function buildConnectorErrorMessage(
       mappingVersion: input.mappingVersion,
       batchId: input.batchId
     }
+  };
+}
+
+export function buildAdminSuccessResponseMessage(
+  input: {
+    requestId: string;
+    command: AdminCommand;
+    tables: readonly string[];
+  },
+  sentAt = new Date().toISOString()
+): AdminResponseMessage {
+  return {
+    type: "admin.response",
+    requestId: validateRequestId(input.requestId),
+    command: input.command,
+    ok: true,
+    payload: {
+      tables: [...input.tables].sort((left, right) => left.localeCompare(right))
+    },
+    sentAt
+  };
+}
+
+export function buildAdminErrorResponseMessage(
+  input: {
+    requestId: string;
+    command: AdminCommand;
+    errorCode: string;
+    message: string;
+    secrets?: readonly string[];
+  },
+  sentAt = new Date().toISOString()
+): AdminResponseMessage {
+  return {
+    type: "admin.response",
+    requestId: validateRequestId(input.requestId),
+    command: input.command,
+    ok: false,
+    error: {
+      errorCode: expectString(input.errorCode, "errorCode"),
+      message: redactString(input.message, input.secrets ?? [])
+    },
+    sentAt
   };
 }
 
@@ -162,12 +305,30 @@ function parseConfigUpdated(message: Record<string, unknown>): ConfigUpdatedMess
   };
 }
 
+function parseAdminRequest(message: Record<string, unknown>): AdminRequestMessage {
+  return {
+    type: "admin.request",
+    requestId: validateRequestId(expectString(message.requestId, "requestId")),
+    command: parseAdminCommand(message.command),
+    sentAt: optionalString(message.sentAt, "sentAt")
+  };
+}
+
+function parseAdminCommand(value: unknown): AdminCommand {
+  const command = expectString(value, "command");
+  if (command !== "schema.listTables") {
+    throw new ProtocolParseError("Unsupported admin command");
+  }
+  return command;
+}
+
 function parseMapping(value: unknown): ValidatedMappingConfig {
   const mapping = expectRecord(value, "mapping");
   const fields = expectRecord(mapping.fields, "mapping.fields");
 
   return {
     mappingVersion: expectString(mapping.mappingVersion, "mapping.mappingVersion"),
+    selectedProductTable: optionalString(mapping.selectedProductTable, "mapping.selectedProductTable"),
     pollIntervalMs: expectPositiveInteger(mapping.pollIntervalMs, "mapping.pollIntervalMs"),
     batchSize: expectPositiveInteger(mapping.batchSize, "mapping.batchSize"),
     incrementalQuery: expectString(mapping.incrementalQuery, "mapping.incrementalQuery"),
@@ -220,6 +381,20 @@ function expectRecord(value: unknown, field: string): Record<string, unknown> {
 function expectString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new ProtocolParseError(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function expectStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new ProtocolParseError(`${field} must be an array`);
+  }
+  return value.map((item, index) => expectString(item, `${field}[${index}]`));
+}
+
+function validateRequestId(value: string): string {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) {
+    throw new ProtocolParseError("requestId must contain only letters, numbers, dots, underscores, colons, or hyphens");
   }
   return value;
 }

@@ -10,6 +10,8 @@ import {
   ProtocolParseError,
   serializeConnectorMessage,
   type BatchAckMessage,
+  type AdminRequestMessage,
+  type AdminResponseMessage,
   type ConfigUpdatedMessage,
   type ConnectorConfigMessage,
   type ConnectorErrorPayload,
@@ -48,7 +50,14 @@ export interface CloseInfo {
   reason: string;
 }
 
-export type WebSocketTransportEvent = "connected" | "disconnected" | "config" | "batchAck" | "retry" | "reloadConfig";
+export type WebSocketTransportEvent =
+  | "connected"
+  | "disconnected"
+  | "config"
+  | "batchAck"
+  | "retry"
+  | "reloadConfig"
+  | "adminRequest";
 
 const DEFAULT_RETRY_POLICY: RetryPolicyOptions = {
   baseDelayMs: 500,
@@ -82,6 +91,7 @@ export class WebSocketTransportClient extends EventEmitter {
   public override on(event: "batchAck", listener: (message: BatchAckMessage) => void): this;
   public override on(event: "retry", listener: (message: BatchAckMessage) => void): this;
   public override on(event: "reloadConfig", listener: (message: BatchAckMessage | ConfigUpdatedMessage) => void): this;
+  public override on(event: "adminRequest", listener: (message: AdminRequestMessage) => void): this;
   public override on(event: WebSocketTransportEvent, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -150,6 +160,16 @@ export class WebSocketTransportClient extends EventEmitter {
       customerId: message.error.customerId,
       mappingVersion: message.error.mappingVersion,
       batchId: message.error.batchId
+    });
+  }
+
+  public sendAdminResponse(message: AdminResponseMessage): void {
+    this.send(message);
+    this.logger.info("admin.response.sent", {
+      requestId: message.requestId,
+      command: message.command,
+      ok: message.ok,
+      tableCount: message.ok ? message.payload.tables.length : undefined
     });
   }
 
@@ -245,6 +265,13 @@ export class WebSocketTransportClient extends EventEmitter {
           reason: message.reason
         });
         this.emit("reloadConfig", message);
+        return;
+      case "admin.request":
+        this.logger.info("admin.request.received", {
+          requestId: message.requestId,
+          command: message.command
+        });
+        this.emit("adminRequest", message);
         return;
     }
   }

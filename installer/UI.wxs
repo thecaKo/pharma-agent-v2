@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Fragment>
+    <Property Id="CONNECTOR_TOKEN" Secure="yes" Hidden="yes" />
+    <Property Id="CONNECTOR_WS_URL" />
+
+    <UI Id="ConnectorInstallerUI">
+      <ui:WixUI Id="WixUI_Minimal" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
+      <Publish Dialog="ConnectorSettingsDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="ConnectorSettingsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
+      <Publish Dialog="ConnectorExitDialog" Control="Finish" Event="EndDialog" Value="Return" />
+      <Publish Dialog="InstallFiles" Control="Install" Event="NewDialog" Value="ConnectorExitDialog" Order="2" />
+    </UI>
+
+    <Dialog Id="ConnectorSettingsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="30" Text="{\WixUI_Font_Bigger}Central Connection Settings" />
+      <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30"
+               Text="Enter the connector token and central WebSocket URL required for service startup." />
+      <Control Id="TokenLabel" Type="Text" X="20" Y="85" Width="120" Height="15" Text="Connector token" />
+      <Control Id="TokenEdit" Type="Password" X="20" Y="100" Width="330" Height="18" Property="CONNECTOR_TOKEN" />
+      <Control Id="WsUrlLabel" Type="Text" X="20" Y="130" Width="160" Height="15" Text="Central WebSocket URL" />
+      <Control Id="WsUrlEdit" Type="Edit" X="20" Y="145" Width="330" Height="18" Property="CONNECTOR_WS_URL" />
+      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="Back" />
+      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="Next" />
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel" />
+    </Dialog>
+
+    <Dialog Id="ConnectorExitDialog" Width="370" Height="270" Title="[ProductName] Setup">
+      <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="30" Text="{\WixUI_Font_Bigger}Installation Complete" />
+      <Control Id="SuccessText" Type="Text" X="20" Y="45" Width="330" Height="40"
+               Text="Pharma Agent Connector was installed and registered as a Windows Service." />
+      <Control Id="DatabaseOnboardingText" Type="Text" X="20" Y="95" Width="330" Height="60"
+               Text="Database connection, table selection, and field mapping still use the existing database setup flow. Run database onboarding with: npm run database-setup" />
+      <Control Id="Finish" Type="PushButton" X="304" Y="243" Width="56" Height="17" Default="yes" Text="Finish" />
+    </Dialog>
+  </Fragment>
+</Wix>

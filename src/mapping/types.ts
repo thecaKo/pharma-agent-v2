@@ -15,6 +15,7 @@ export interface ProductFieldMappings {
 
 export interface MappingConfig {
   mappingVersion?: string;
+  selectedProductTable?: string;
   pollIntervalMs?: number;
   batchSize?: number;
   incrementalQuery?: string;
@@ -25,6 +26,7 @@ export interface MappingConfig {
 
 export interface ValidatedMappingConfig {
   mappingVersion: string;
+  selectedProductTable?: string;
   pollIntervalMs: number;
   batchSize: number;
   incrementalQuery: string;

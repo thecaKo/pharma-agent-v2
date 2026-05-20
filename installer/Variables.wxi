@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?define ProductName = "Pharma Agent Connector" ?>
+  <?define ProductVersion = "0.1.0.0" ?>
+  <?define Manufacturer = "Pharma" ?>
+  <?define UpgradeCode = "A4B8C2E1-9F3D-4A6B-8C7E-1D2F3A4B5C6D" ?>
+  <?define BundleUpgradeCode = "B5C9D3F2-0E4C-5B7A-9D8F-2E3A4B5C6D7E" ?>
+  <?define ServiceName = "PharmaAgentConnector" ?>
+  <?define ServiceDisplayName = "Pharma Agent Connector" ?>
+  <?define ServiceDescription = "Outbound-only local connector for Pharma Agent product synchronization." ?>
+  <?define ServiceEntrypoint = "dist\main.js" ?>
+  <?define ProgramDataDirName = "PharmaAgentConnector" ?>
+  <?define ProgramDataConfigFileName = "connector-config.json" ?>
+</Include>

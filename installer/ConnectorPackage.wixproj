@@ -1,0 +1,15 @@
+<Project Sdk="WixToolset.Sdk/4.0.5">
+  <PropertyGroup>
+    <OutputName>PharmaAgentConnector</OutputName>
+    <OutputType>Package</OutputType>
+    <StagingDir Condition="'$(StagingDir)' == ''">$(MSBuildThisFileDirectory)staging</StagingDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Package.wxs" />
+    <Compile Include="Files.wxs" />
+    <Compile Include="Service.wxs" />
+    <Compile Include="ProgramData.wxs" />
+    <Compile Include="UI.wxs" />
+  </ItemGroup>
+</Project>

@@ -20,6 +20,7 @@ const STATE_KEYS = [
   "connectorId",
   "customerId",
   "mappingVersion",
+  "selectedProductTable",
   "cursorField",
   "cursorType",
   "sourceProductCodeField",

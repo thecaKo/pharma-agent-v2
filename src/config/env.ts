@@ -1,11 +1,6 @@
-import type {
-  ConfigValidationIssue,
-  ConnectorConfig,
-  DatabaseDriver,
-  LogLevel
-} from "./types.js";
+import type { ConfigValidationIssue, ConnectorConfig, DatabaseDriver, LogLevel } from "./types.js";
 
-const REQUIRED_ENV = [
+export const REQUIRED_ENV = [
   "CONNECTOR_TOKEN",
   "CONNECTOR_WS_URL",
   "DB_DRIVER",
@@ -15,6 +10,8 @@ const REQUIRED_ENV = [
   "DB_USER",
   "DB_PASSWORD"
 ] as const;
+
+export const CONNECTOR_ENV_KEYS = [...REQUIRED_ENV, "LOG_LEVEL"] as const;
 
 const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird"]);
 const LOG_LEVELS = new Set<LogLevel>(["debug", "info", "warn", "error"]);

@@ -6,6 +6,7 @@ import {
   createSourceDatabaseAdapter,
   type AdapterFactoryDependencies
 } from "../db/adapter-factory.js";
+import { attachFirebirdConnection } from "../db/firebird-driver.js";
 import type { SourceDatabaseAdapter } from "../db/source-adapter.js";
 import { createLogger, type Logger } from "../logging/logger.js";
 import type { ValidatedMappingConfig } from "../mapping/types.js";
@@ -16,10 +17,13 @@ import { StateStore } from "../state/state-store.js";
 import { STATE_FILE_NAME, type ConnectorState } from "../state/state-types.js";
 import type {
   BatchAckMessage,
+  AdminRequestMessage,
+  AdminResponseMessage,
   ConfigUpdatedMessage,
   ConnectorConfigMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
+import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage } from "../transport/protocol.js";
 import { WebSocketTransportClient } from "../transport/ws-client.js";
 import { CONNECTOR_VERSION } from "../version.js";
 
@@ -29,6 +33,7 @@ export interface RuntimeTransport {
   on(event: "config", listener: (message: ConnectorConfigMessage) => void): this;
   on(event: "batchAck", listener: (message: BatchAckMessage) => void): this;
   on(event: "reloadConfig", listener: (message: BatchAckMessage | ConfigUpdatedMessage) => void): this;
+  on(event: "adminRequest", listener: (message: AdminRequestMessage) => void): this;
   connect(): Promise<void>;
   close(): Promise<void>;
   isConnected(): boolean;
@@ -41,6 +46,7 @@ export interface RuntimeTransport {
     sentAt?: string;
   }): void;
   sendConnectorError(input: ConnectorErrorPayload, sentAt?: string): void;
+  sendAdminResponse(message: AdminResponseMessage): void;
   getReconnectAttemptCount(): number;
 }
 
@@ -84,6 +90,8 @@ export class ConnectorRuntime {
   private readonly now: () => string;
   private poller?: IncrementalPoller;
   private activeMapping?: ValidatedMappingConfig;
+  private activeConnectorId?: string;
+  private activeCustomerId?: string;
   private inFlightBatch?: ProductChangeBatch;
   private pollTimer?: unknown;
   private pendingPoll?: Promise<void>;
@@ -197,16 +205,16 @@ export class ConnectorRuntime {
     this.transport.on("reloadConfig", () => {
       this.pausePolling("config reload requested");
     });
+    this.transport.on("adminRequest", (message) => {
+      this.handleAdminRequest(message).catch((error) => this.handleRuntimeError("ADMIN_REQUEST_FAILED", error));
+    });
   }
 
   private async handleConfig(message: ConnectorConfigMessage): Promise<void> {
     this.pausePolling("mapping activation");
 
     const mapping = validateMappingConfig(message.mapping);
-    if (!this.adapterConnected) {
-      await this.adapter.connect();
-      this.adapterConnected = true;
-    }
+    await this.ensureAdapterConnected();
 
     const previous = await this.stateStore.load();
     const keepCursor = canReuseAcknowledgedCursor(previous, mapping);
@@ -214,6 +222,7 @@ export class ConnectorRuntime {
       connectorId: message.connectorId,
       customerId: message.customerId,
       mappingVersion: mapping.mappingVersion,
+      selectedProductTable: mapping.selectedProductTable,
       cursorField: mapping.cursorField,
       cursorType: mapping.cursorType,
       sourceProductCodeField: mapping.fields.sourceProductCode,
@@ -224,6 +233,8 @@ export class ConnectorRuntime {
     await this.saveState(nextState);
 
     this.activeMapping = mapping;
+    this.activeConnectorId = message.connectorId;
+    this.activeCustomerId = message.customerId;
     this.inFlightBatch = undefined;
     this.poller = new IncrementalPoller({
       adapter: this.adapter,
@@ -241,10 +252,73 @@ export class ConnectorRuntime {
     this.logger.info("mapping.active", {
       connectorId: message.connectorId,
       customerId: message.customerId,
-      mappingVersion: mapping.mappingVersion
+      mappingVersion: mapping.mappingVersion,
+      ...(mapping.selectedProductTable ? { selectedProductTable: mapping.selectedProductTable } : {})
     });
     this.sendHeartbeat();
     this.scheduleNextPoll(0);
+  }
+
+  private async handleAdminRequest(message: AdminRequestMessage): Promise<void> {
+    const identity = this.activeStateIdentity();
+    this.logger.info("admin.request.received", {
+      requestId: message.requestId,
+      command: message.command,
+      connectorId: identity.connectorId,
+      customerId: identity.customerId
+    });
+
+    try {
+      await this.ensureAdapterConnected();
+      const tables = await this.adapter.listTables();
+      const tableNames = tables.map((table) => table.name);
+      const response = buildAdminSuccessResponseMessage(
+        {
+          requestId: message.requestId,
+          command: message.command,
+          tables: tableNames
+        },
+        this.now()
+      );
+
+      this.transport.sendAdminResponse(response);
+      this.logger.info("admin.response.sent", {
+        requestId: response.requestId,
+        command: response.command,
+        ok: response.ok,
+        tableCount: tableNames.length
+      });
+    } catch (error) {
+      const errorInput = {
+        errorCode: "TABLE_DISCOVERY_FAILED",
+        message: error instanceof Error ? error.message : String(error)
+      };
+      const response = buildAdminErrorResponseMessage(
+        {
+          requestId: message.requestId,
+          command: message.command,
+          errorCode: errorInput.errorCode,
+          message: errorInput.message,
+          secrets: configSecrets(this.config)
+        },
+        this.now()
+      );
+
+      this.logger.warn("admin.request.failed", {
+        requestId: message.requestId,
+        command: message.command,
+        errorCode: errorInput.errorCode,
+        message: response.ok ? undefined : response.error.message
+      });
+
+      this.transport.sendAdminResponse(response);
+      this.logger.info("admin.response.sent", {
+        requestId: response.requestId,
+        command: response.command,
+        ok: response.ok,
+        tableCount: undefined
+      });
+    }
   }
 
   private async handleBatchAck(message: BatchAckMessage): Promise<void> {
@@ -265,6 +339,7 @@ export class ConnectorRuntime {
         connectorId: batch.connectorId,
         customerId: batch.customerId,
         mappingVersion: batch.mappingVersion,
+        selectedProductTable: this.activeMapping?.selectedProductTable,
         cursorField: this.activeMapping?.cursorField,
         cursorType: this.activeMapping?.cursorType,
         sourceProductCodeField: this.activeMapping?.fields.sourceProductCode,
@@ -360,6 +435,15 @@ export class ConnectorRuntime {
     await this.pendingStateWrite;
   }
 
+  private async ensureAdapterConnected(): Promise<void> {
+    if (this.adapterConnected) {
+      return;
+    }
+
+    await this.adapter.connect();
+    this.adapterConnected = true;
+  }
+
   private sendHeartbeat(lastSuccessfulSendAt?: string): void {
     try {
       this.transport.sendHeartbeat({
@@ -399,8 +483,8 @@ export class ConnectorRuntime {
 
   private activeStateIdentity(): Pick<ConnectorState, "connectorId" | "customerId"> {
     return {
-      connectorId: this.inFlightBatch?.connectorId,
-      customerId: this.inFlightBatch?.customerId
+      connectorId: this.inFlightBatch?.connectorId ?? this.activeConnectorId,
+      customerId: this.inFlightBatch?.customerId ?? this.activeCustomerId
     };
   }
 }
@@ -434,45 +518,15 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
     },
     firebirdConnectionFactory: async (config) => {
       const firebird = await optionalImport("node-firebird");
-      return await new Promise((resolve, reject) => {
-        firebird.attach(
-          {
-            host: config.host,
-            port: config.port,
-            database: config.database,
-            user: config.user,
-            password: config.password
-          },
-          (error: Error | undefined, db: { query: Function; detach: Function }) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve({
-              query: (sql: string, params: readonly unknown[]) =>
-                new Promise((queryResolve, queryReject) => {
-                  db.query(sql, params, (queryError: Error | undefined, result: unknown) => {
-                    if (queryError) {
-                      queryReject(queryError);
-                      return;
-                    }
-                    queryResolve(result);
-                  });
-                }),
-              detach: () =>
-                new Promise<void>((detachResolve, detachReject) => {
-                  db.detach((detachError: Error | undefined) => {
-                    if (detachError) {
-                      detachReject(detachError);
-                      return;
-                    }
-                    detachResolve();
-                  });
-                })
-            });
-          }
-        );
-      });
+      return await attachFirebirdConnection(
+        firebird as {
+          attach: (
+            options: Record<string, unknown>,
+            callback: (error: Error | undefined, db: { query: Function; detach: Function }) => void
+          ) => void;
+        },
+        config
+      );
     }
   };
 }
@@ -497,6 +551,7 @@ function canReuseAcknowledgedCursor(
   return (
     previous.cursorField === nextMapping.cursorField &&
     previous.cursorType === nextMapping.cursorType &&
-    previous.sourceProductCodeField === nextMapping.fields.sourceProductCode
+    previous.sourceProductCodeField === nextMapping.fields.sourceProductCode &&
+    previous.selectedProductTable === nextMapping.selectedProductTable
   );
 }

@@ -9,7 +9,9 @@ function adapterWithRows(rows: Record<string, unknown>[] = []): SourceDatabaseAd
   return {
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
-    queryChanges: vi.fn(async () => rows)
+    queryChanges: vi.fn(async () => rows),
+    listTables: vi.fn(async () => [{ name: "products" }]),
+    listColumns: vi.fn(async () => [])
   };
 }
 
@@ -54,6 +56,48 @@ describe("IncrementalPoller", () => {
       cursor: "2026-05-16T19:00:00.000Z",
       limit: 500
     });
+  });
+
+  it("uses epoch timestamp cursor when no acknowledged timestamp cursor exists", async () => {
+    const adapter = adapterWithRows([]);
+
+    const result = await new IncrementalPoller({
+      adapter,
+      mapping: validateMappingConfig(validMapping()),
+      state: stateReader({}),
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      isTransportReady: () => true
+    }).pollOnce();
+
+    expect(adapter.queryChanges).toHaveBeenCalledWith({
+      sql: "select * from products where updated_at > ? order by updated_at",
+      cursor: "1970-01-01T00:00:00.000Z",
+      limit: 500
+    });
+    expect(result.cursorBefore).toBe("1970-01-01T00:00:00.000Z");
+    expect(result.cursorAfter).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  it("uses zero cursor when no acknowledged number cursor exists", async () => {
+    const adapter = adapterWithRows([]);
+
+    const result = await new IncrementalPoller({
+      adapter,
+      mapping: validateMappingConfig(validMapping({ cursorType: "number", cursorField: "seq" })),
+      state: stateReader({ lastAckedCursor: null }),
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      isTransportReady: () => true
+    }).pollOnce();
+
+    expect(adapter.queryChanges).toHaveBeenCalledWith({
+      sql: "select * from products where updated_at > ? order by updated_at",
+      cursor: 0,
+      limit: 500
+    });
+    expect(result.cursorBefore).toBe(0);
+    expect(result.cursorAfter).toBe(0);
   });
 
   it("skips rows missing sourceProductCode and batches valid rows from the same result set", async () => {

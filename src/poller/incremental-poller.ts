@@ -104,7 +104,7 @@ export class IncrementalPoller {
     }
 
     const state = await this.state.load();
-    const cursorBefore = state.lastAckedCursor ?? null;
+    const cursorBefore = state.lastAckedCursor ?? initialCursorValue(mapping.cursorType);
 
     this.logger?.info("poll started", {
       connectorId: this.connectorId,
@@ -192,4 +192,8 @@ export class IncrementalPoller {
       rejectedRowCount: mapped.rejected.length
     };
   }
+}
+
+function initialCursorValue(cursorType: ValidatedMappingConfig["cursorType"]): CursorValue {
+  return cursorType === "number" ? 0 : "1970-01-01T00:00:00.000Z";
 }

@@ -87,7 +87,12 @@ describe("source adapter fixture integrations", () => {
     const adapter = {
       connect: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
-      queryChanges: vi.fn(async () => fixtureRows)
+      queryChanges: vi.fn(async () => fixtureRows),
+      listTables: vi.fn(async () => [{ name: "products" }]),
+      listColumns: vi.fn(async () => [
+        { name: "product_id", dataType: "varchar", nullable: false },
+        { name: "updated_at", dataType: "integer", nullable: false }
+      ])
     };
 
     const result = await new IncrementalPoller({
@@ -114,5 +119,6 @@ describe("source adapter fixture integrations", () => {
       price: 12.5,
       stock: 7
     });
+    expect(adapter.listColumns).not.toHaveBeenCalled();
   });
 });

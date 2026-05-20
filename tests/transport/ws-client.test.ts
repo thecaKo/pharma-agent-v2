@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../../src/logging/logger.js";
 import { buildProductBatch } from "../../src/poller/batch-builder.js";
+import { buildAdminSuccessResponseMessage } from "../../src/transport/protocol.js";
 import { WebSocketTransportClient } from "../../src/transport/ws-client.js";
 import { validMapping } from "../helpers/mapping.js";
 import { MockWebSocketServer, waitFor } from "../support/mock-ws-server.js";
@@ -51,6 +52,63 @@ describe("WebSocketTransportClient", () => {
         mappingVersion: "mapping-v1"
       }
     });
+  });
+
+  it("emits admin.request messages as a distinct runtime event", async () => {
+    client = createClient();
+    const adminRequestReceived = onceClientEvent(client, "adminRequest");
+
+    await client.connect();
+    server.sendJson({
+      type: "admin.request",
+      requestId: "req-1",
+      command: "schema.listTables"
+    });
+
+    await expect(adminRequestReceived).resolves.toEqual({
+      type: "admin.request",
+      requestId: "req-1",
+      command: "schema.listTables",
+      sentAt: undefined
+    });
+  });
+
+  it("logs and ignores malformed admin.request messages", async () => {
+    client = createClient();
+    let adminRequestCount = 0;
+    client.on("adminRequest", () => {
+      adminRequestCount += 1;
+    });
+
+    await client.connect();
+    server.sendJson({
+      type: "admin.request",
+      requestId: "",
+      command: "schema.listTables"
+    });
+    await waitFor(() => logs.join("\n").includes("PROTOCOL_PARSE_ERROR"));
+
+    expect(adminRequestCount).toBe(0);
+    expect(client.isConnected()).toBe(true);
+  });
+
+  it("logs and ignores unsupported admin commands", async () => {
+    client = createClient();
+    let adminRequestCount = 0;
+    client.on("adminRequest", () => {
+      adminRequestCount += 1;
+    });
+
+    await client.connect();
+    server.sendJson({
+      type: "admin.request",
+      requestId: "req-1",
+      command: "schema.describeTable"
+    });
+    await waitFor(() => logs.join("\n").includes("Unsupported admin command"));
+
+    expect(adminRequestCount).toBe(0);
+    expect(client.isConnected()).toBe(true);
   });
 
   it("sends heartbeat messages containing version and last successful send metadata", async () => {
@@ -207,6 +265,70 @@ describe("WebSocketTransportClient", () => {
     });
     expect(message.raw).not.toContain("connector-token-secret");
     expect(message.raw).not.toContain("database-password-secret");
+  });
+
+  it("sends serialized admin.response messages", async () => {
+    client = createClient();
+    await client.connect();
+
+    client.sendAdminResponse(
+      buildAdminSuccessResponseMessage(
+        {
+          requestId: "req-1",
+          command: "schema.listTables",
+          tables: ["products"]
+        },
+        "2026-05-16T20:00:04.000Z"
+      )
+    );
+
+    await expect(server.nextMessage()).resolves.toMatchObject({
+      parsed: {
+        type: "admin.response",
+        requestId: "req-1",
+        command: "schema.listTables",
+        ok: true,
+        payload: {
+          tables: ["products"]
+        },
+        sentAt: "2026-05-16T20:00:04.000Z"
+      }
+    });
+  });
+
+  it("routes an in-memory admin request and returns a correlated admin response", async () => {
+    client = createClient();
+    client.on("adminRequest", (message) => {
+      client?.sendAdminResponse(
+        buildAdminSuccessResponseMessage(
+          {
+            requestId: message.requestId,
+            command: message.command,
+            tables: ["products", "inventory"]
+          },
+          "2026-05-16T20:00:05.000Z"
+        )
+      );
+    });
+
+    await client.connect();
+    server.sendJson({
+      type: "admin.request",
+      requestId: "req-42",
+      command: "schema.listTables"
+    });
+
+    await expect(server.nextMessage()).resolves.toMatchObject({
+      parsed: {
+        type: "admin.response",
+        requestId: "req-42",
+        command: "schema.listTables",
+        ok: true,
+        payload: {
+          tables: ["inventory", "products"]
+        }
+      }
+    });
   });
 
   function createClient(

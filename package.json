@@ -8,6 +8,10 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "database-setup": "node dist/cli/database-setup.js",
+    "discover-databases": "node dist/cli/discover-databases.js",
+    "mock-panel": "node dist/cli/mock-panel.js",
+    "package:windows-installer": "npm run build && node dist/installer/package-windows-installer.js",
     "start": "node dist/main.js",
     "start:dev": "tsx src/main.ts",
     "test": "vitest run",
@@ -27,6 +31,7 @@
   "dependencies": {
     "dotenv": "^16.6.1",
     "mysql2": "^3.22.3",
+    "node-firebird": "^2.3.2",
     "ws": "^8.20.1"
   }
 }

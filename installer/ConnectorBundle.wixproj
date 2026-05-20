@@ -1,0 +1,15 @@
+<Project Sdk="WixToolset.Sdk/4.0.5">
+  <PropertyGroup>
+    <OutputName>PharmaAgentConnector-Setup</OutputName>
+    <OutputType>Bundle</OutputType>
+    <ConnectorMsiPath Condition="'$(ConnectorMsiPath)' == ''">$(MSBuildThisFileDirectory)bin\PharmaAgentConnector.msi</ConnectorMsiPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Bundle.wxs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="ConnectorPackage.wixproj" />
+  </ItemGroup>
+</Project>

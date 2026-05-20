@@ -5,11 +5,17 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { ConfigValidationError } from "../../src/config/env.js";
+import { buildMockPanelConnectorConfig } from "../../src/cli/mock-panel.js";
 import type { SourceDatabaseAdapter } from "../../src/db/source-adapter.js";
 import type { ProductChangeBatch } from "../../src/poller/batch-builder.js";
 import { ConnectorRuntime, type RuntimeTransport } from "../../src/service/runtime.js";
 import { StateStore } from "../../src/state/state-store.js";
-import type { BatchAckMessage, ConnectorConfigMessage } from "../../src/transport/protocol.js";
+import type {
+  AdminRequestMessage,
+  AdminResponseMessage,
+  BatchAckMessage,
+  ConnectorConfigMessage
+} from "../../src/transport/protocol.js";
 import { validEnv } from "../helpers/env.js";
 import { validMapping } from "../helpers/mapping.js";
 
@@ -219,6 +225,40 @@ describe("ConnectorRuntime", () => {
     });
   });
 
+  it("preserves the acknowledged cursor when selectedProductTable is unchanged", async () => {
+    const stateStore = await tempStateStore();
+    await stateStore.save({
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mappingVersion: "mapping-v1",
+      selectedProductTable: "products",
+      cursorField: "updated_at",
+      cursorType: "timestamp",
+      sourceProductCodeField: "product_id",
+      lastAckedCursor: "2026-05-16T20:00:01.000Z"
+    });
+
+    const transport = new FakeTransport();
+    const runtime = createRuntime({ transport, stateStore, adapter: adapterWithRows([]) });
+
+    await runtime.start();
+    transport.emitConfig(
+      configMessage({
+        mapping: validMapping({
+          mappingVersion: "mapping-v2",
+          selectedProductTable: "products"
+        })
+      })
+    );
+    await waitUntil(() => runtime.getState().activeMapping?.mappingVersion === "mapping-v2");
+
+    await expect(stateStore.load()).resolves.toMatchObject({
+      mappingVersion: "mapping-v2",
+      selectedProductTable: "products",
+      lastAckedCursor: "2026-05-16T20:00:01.000Z"
+    });
+  });
+
   it("resets the acknowledged cursor when a mapping update changes the cursor contract", async () => {
     const stateStore = await tempStateStore();
     await stateStore.save({
@@ -253,6 +293,220 @@ describe("ConnectorRuntime", () => {
       sourceProductCodeField: "product_id",
       lastAckedCursor: null
     });
+  });
+
+  it("resets the acknowledged cursor when selectedProductTable changes", async () => {
+    const stateStore = await tempStateStore();
+    await stateStore.save({
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mappingVersion: "mapping-v1",
+      selectedProductTable: "products",
+      cursorField: "updated_at",
+      cursorType: "timestamp",
+      sourceProductCodeField: "product_id",
+      lastAckedCursor: "2026-05-16T20:00:01.000Z"
+    });
+
+    const transport = new FakeTransport();
+    const runtime = createRuntime({ transport, stateStore, adapter: adapterWithRows([]) });
+
+    await runtime.start();
+    transport.emitConfig(
+      configMessage({
+        mapping: validMapping({
+          mappingVersion: "mapping-v2",
+          selectedProductTable: "inventory"
+        })
+      })
+    );
+    await waitUntil(() => runtime.getState().activeMapping?.mappingVersion === "mapping-v2");
+
+    await expect(stateStore.load()).resolves.toMatchObject({
+      mappingVersion: "mapping-v2",
+      selectedProductTable: "inventory",
+      lastAckedCursor: null
+    });
+  });
+
+  it("resets the acknowledged cursor when fake transport receives mock panel config with changed selected table", async () => {
+    const stateStore = await tempStateStore();
+    await stateStore.save({
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mappingVersion: "mapping-v1",
+      selectedProductTable: "products",
+      cursorField: "updated_at",
+      cursorType: "timestamp",
+      sourceProductCodeField: "product_id",
+      lastAckedCursor: "2026-05-16T20:00:01.000Z"
+    });
+    const transport = new FakeTransport();
+    const runtime = createRuntime({ transport, stateStore, adapter: adapterWithRows([]) });
+
+    await runtime.start();
+    transport.emitConfig(
+      buildMockPanelConnectorConfig({
+        connectorId: "connector-1",
+        customerId: "customer-1",
+        mapping: validMapping({
+          mappingVersion: "mapping-v2",
+          incrementalQuery: "select * from inventory where updated_at > ? order by updated_at"
+        }),
+        selectedProductTable: "inventory"
+      })
+    );
+    await waitUntil(() => runtime.getState().activeMapping?.selectedProductTable === "inventory");
+
+    await expect(stateStore.load()).resolves.toMatchObject({
+      mappingVersion: "mapping-v2",
+      selectedProductTable: "inventory",
+      lastAckedCursor: null
+    });
+    expect(runtime.getState().activeMapping?.incrementalQuery).toBe(
+      "select * from inventory where updated_at > ? order by updated_at"
+    );
+  });
+
+  it("persists selectedProductTable during fake transport mapping activation before polling resumes", async () => {
+    const stateStore = await tempStateStore();
+    const transport = new FakeTransport();
+    const adapter = adapterWithRows([]);
+    const timers = manualTimers();
+    const logger = silentLogger();
+    const runtime = createRuntime({ transport, stateStore, adapter, timers, logger });
+
+    await runtime.start();
+    transport.emitConfig(
+      configMessage({
+        mapping: validMapping({
+          selectedProductTable: "products"
+        })
+      })
+    );
+    await waitUntil(() => runtime.getState().activeMapping?.selectedProductTable === "products");
+
+    expect(adapter.queryChanges).not.toHaveBeenCalled();
+    expect(timers.callbacks).toHaveLength(1);
+    await expect(stateStore.load()).resolves.toMatchObject({
+      mappingVersion: "mapping-v1",
+      selectedProductTable: "products",
+      lastAckedCursor: null
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      "mapping.active",
+      expect.objectContaining({ selectedProductTable: "products" })
+    );
+  });
+
+  it("handles schema.listTables and sends a correlated success response with sorted table names", async () => {
+    const transport = new FakeTransport();
+    const adapter = adapterWithTables([{ name: "z_products" }, { name: "a_products" }]);
+    const logger = silentLogger();
+    const runtime = createRuntime({ transport, adapter, logger });
+
+    await runtime.start();
+    transport.emitAdminRequest(adminRequest({ requestId: "request-1" }));
+    await waitUntil(() => transport.sentAdminResponses.length === 1);
+
+    expect(adapter.connect).toHaveBeenCalledOnce();
+    expect(adapter.listTables).toHaveBeenCalledOnce();
+    expect(transport.sentAdminResponses[0]).toMatchObject({
+      type: "admin.response",
+      requestId: "request-1",
+      command: "schema.listTables",
+      ok: true,
+      payload: { tables: ["a_products", "z_products"] }
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      "admin.request.received",
+      expect.objectContaining({ requestId: "request-1", command: "schema.listTables" })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "admin.response.sent",
+      expect.objectContaining({ requestId: "request-1", ok: true, tableCount: 2 })
+    );
+  });
+
+  it("connects the adapter before discovery when no mapping has been activated", async () => {
+    const transport = new FakeTransport();
+    const adapter = adapterWithTables([{ name: "products" }]);
+    const runtime = createRuntime({ transport, adapter });
+
+    await runtime.start();
+    transport.emitAdminRequest(adminRequest());
+    await waitUntil(() => transport.sentAdminResponses.length === 1);
+
+    expect(adapter.connect).toHaveBeenCalledOnce();
+    expect(adapter.queryChanges).not.toHaveBeenCalled();
+    expect(runtime.getState().activeMapping).toBeUndefined();
+    expect(runtime.getState().pollingPaused).toBe(true);
+  });
+
+  it("reuses an already connected adapter when discovery occurs after mapping activation", async () => {
+    const transport = new FakeTransport();
+    const adapter = adapterWithTables([{ name: "products" }]);
+    const runtime = createRuntime({ transport, adapter });
+
+    await runtime.start();
+    transport.emitConfig(configMessage());
+    await waitUntil(() => runtime.getState().activeMapping?.mappingVersion === "mapping-v1");
+    transport.emitAdminRequest(adminRequest({ requestId: "request-after-config" }));
+    await waitUntil(() => transport.sentAdminResponses.length === 1);
+
+    expect(adapter.connect).toHaveBeenCalledOnce();
+    expect(adapter.listTables).toHaveBeenCalledOnce();
+    expect(transport.sentAdminResponses[0]?.requestId).toBe("request-after-config");
+  });
+
+  it("sends a correlated admin error response when table discovery fails", async () => {
+    const transport = new FakeTransport();
+    const adapter = adapterWithTables([], new Error("cannot inspect test-db-password tables"));
+    const logger = silentLogger();
+    const runtime = createRuntime({ transport, adapter, logger });
+
+    await runtime.start();
+    transport.emitAdminRequest(adminRequest({ requestId: "request-failure" }));
+    await waitUntil(() => transport.sentAdminResponses.length === 1);
+
+    expect(transport.sentAdminResponses[0]).toMatchObject({
+      type: "admin.response",
+      requestId: "request-failure",
+      command: "schema.listTables",
+      ok: false,
+      error: {
+        errorCode: "TABLE_DISCOVERY_FAILED",
+        message: "cannot inspect [REDACTED] tables"
+      }
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "admin.request.failed",
+      expect.objectContaining({
+        requestId: "request-failure",
+        errorCode: "TABLE_DISCOVERY_FAILED",
+        message: "cannot inspect [REDACTED] tables"
+      })
+    );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("test-db-password");
+  });
+
+  it("does not pause polling for a successful discovery request", async () => {
+    const transport = new FakeTransport();
+    const adapter = adapterWithTables([{ name: "products" }]);
+    const timers = manualTimers();
+    const runtime = createRuntime({ transport, adapter, timers });
+
+    await runtime.start();
+    transport.emitConfig(configMessage());
+    await waitUntil(() => runtime.getState().activeMapping?.mappingVersion === "mapping-v1");
+    const scheduledPolls = timers.callbacks.length;
+
+    transport.emitAdminRequest(adminRequest());
+    await waitUntil(() => transport.sentAdminResponses.length === 1);
+
+    expect(runtime.getState().pollingPaused).toBe(false);
+    expect(runtime.getState().activeMapping?.mappingVersion).toBe("mapping-v1");
+    expect(timers.callbacks).toHaveLength(scheduledPolls);
   });
 
   it("shutdown closes WebSocket and database adapter after state writes complete", async () => {
@@ -299,7 +553,7 @@ function createRuntime(
 ): ConnectorRuntime {
   return new ConnectorRuntime({
     env: validEnv(),
-    logger: silentLogger(),
+    logger: overrides.logger ?? silentLogger(),
     stateStore: overrides.stateStore ?? new StateStore({ stateFilePath: join(tmpdir(), `runtime-${randomUUID()}.json`) }),
     transport: overrides.transport ?? new FakeTransport(),
     adapter: overrides.adapter ?? adapterWithRows([]),
@@ -322,7 +576,33 @@ function adapterWithRows(rows: Record<string, unknown>[]): SourceDatabaseAdapter
   return {
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
-    queryChanges: vi.fn(async () => rows)
+    queryChanges: vi.fn(async () => rows),
+    listTables: vi.fn(async () => [{ name: "products" }]),
+    listColumns: vi.fn(async () => [])
+  };
+}
+
+function adapterWithTables(tables: Array<{ name: string }>, listTablesError?: Error): SourceDatabaseAdapter {
+  return {
+    connect: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    queryChanges: vi.fn(async () => []),
+    listColumns: vi.fn(async () => []),
+    listTables: vi.fn(async () => {
+      if (listTablesError) {
+        throw listTablesError;
+      }
+      return tables;
+    })
+  };
+}
+
+function adminRequest(overrides: Partial<AdminRequestMessage> = {}): AdminRequestMessage {
+  return {
+    type: "admin.request",
+    requestId: "request-1",
+    command: "schema.listTables",
+    ...overrides
   };
 }
 
@@ -374,6 +654,7 @@ async function waitUntil(assertion: () => boolean | Promise<boolean>, timeoutMs 
 
 class FakeTransport extends EventEmitter implements RuntimeTransport {
   public readonly sentBatches: ProductChangeBatch[] = [];
+  public readonly sentAdminResponses: AdminResponseMessage[] = [];
   public readonly connect = vi.fn(async () => {
     this.connected = true;
     this.emit("connected");
@@ -383,6 +664,9 @@ class FakeTransport extends EventEmitter implements RuntimeTransport {
   });
   public readonly sendHeartbeat = vi.fn();
   public readonly sendConnectorError = vi.fn();
+  public readonly sendAdminResponse = vi.fn((message: AdminResponseMessage) => {
+    this.sentAdminResponses.push(message);
+  });
   private connected = false;
 
   public isConnected(): boolean {
@@ -403,5 +687,9 @@ class FakeTransport extends EventEmitter implements RuntimeTransport {
 
   public emitAck(message: BatchAckMessage): void {
     this.emit("batchAck", message);
+  }
+
+  public emitAdminRequest(message: AdminRequestMessage): void {
+    this.emit("adminRequest", message);
   }
 }

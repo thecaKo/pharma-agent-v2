@@ -35,8 +35,11 @@ export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingC
     throw new MappingValidationError(issues);
   }
 
+  const selectedProductTable = normalizeOptionalMapping(mapping.selectedProductTable);
+
   return {
     mappingVersion: mapping.mappingVersion?.trim() as string,
+    ...(selectedProductTable ? { selectedProductTable } : {}),
     pollIntervalMs: mapping.pollIntervalMs as number,
     batchSize: mapping.batchSize as number,
     incrementalQuery: mapping.incrementalQuery?.trim() as string,

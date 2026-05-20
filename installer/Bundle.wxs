@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <?include Variables.wxi ?>
+
+  <Bundle Name="$(var.ProductName)"
+          Manufacturer="$(var.Manufacturer)"
+          Version="$(var.ProductVersion)"
+          UpgradeCode="$(var.BundleUpgradeCode)">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage Id="ConnectorMsi"
+                  SourceFile="$(var.ConnectorMsiPath)"
+                  Vital="yes"
+                  DisplayInternalUI="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

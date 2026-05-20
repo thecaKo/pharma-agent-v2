@@ -24,6 +24,18 @@ describe("validateMappingConfig", () => {
     });
   });
 
+  it("preserves trimmed selectedProductTable when provided", () => {
+    expect(validateMappingConfig(validMapping({ selectedProductTable: "  products  " }))).toMatchObject({
+      selectedProductTable: "products"
+    });
+  });
+
+  it("omits empty selectedProductTable when provided", () => {
+    expect(validateMappingConfig(validMapping({ selectedProductTable: "   " }))).not.toHaveProperty(
+      "selectedProductTable"
+    );
+  });
+
   it("rejects missing required top-level mapping fields", () => {
     expect(() =>
       validateMappingConfig({

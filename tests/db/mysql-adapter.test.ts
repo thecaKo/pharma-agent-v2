@@ -63,6 +63,155 @@ describe("MySqlSourceAdapter", () => {
     ]);
   });
 
+  it("queries table metadata and returns only sorted table names", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => [
+        [
+          { name: "z_products", column_count: 12 },
+          { name: "customers", row_count: 99 },
+          { name: "products", sample: { product_id: "P-001" } }
+        ],
+        []
+      ]),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    const tables = await adapter.listTables();
+
+    expect(connection.query).toHaveBeenCalledWith(expect.stringContaining("information_schema.tables"), ["pharmacy"]);
+    expect(connection.query).toHaveBeenCalledWith(expect.stringContaining("table_type = 'BASE TABLE'"), ["pharmacy"]);
+    expect(tables).toEqual([{ name: "customers" }, { name: "products" }, { name: "z_products" }]);
+  });
+
+  it("returns an empty table list when metadata rows are not in the expected shape", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => [[{ table: "products" }, { name: 123 }, null], []]),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    await expect(adapter.listTables()).resolves.toEqual([]);
+  });
+
+  it("queries column metadata for the configured schema and selected table", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => [
+        [
+          { name: " PRODUCT_ID ", dataType: "VARCHAR", nullable: "NO", extra: "ignored" },
+          { COLUMN_NAME: "updated_at", DATA_TYPE: "DATETIME", IS_NULLABLE: "YES" },
+          { name: "stock", dataType: " int ", nullable: true }
+        ],
+        []
+      ]),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    const columns = await adapter.listColumns("products");
+
+    expect(connection.query).toHaveBeenCalledWith(expect.stringContaining("information_schema.columns"), [
+      "pharmacy",
+      "products"
+    ]);
+    expect(connection.query).toHaveBeenCalledWith(expect.stringContaining("table_name = ?"), ["pharmacy", "products"]);
+    expect(columns).toEqual([
+      { name: "PRODUCT_ID", dataType: "varchar", nullable: false },
+      { name: "updated_at", dataType: "datetime", nullable: true },
+      { name: "stock", dataType: "int", nullable: true }
+    ]);
+  });
+
+  it("returns an empty column list when metadata rows are not in the expected shape", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => [[{ column: "product_id" }, { name: " " }, null], []]),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    await expect(adapter.listColumns("products")).resolves.toEqual([]);
+  });
+
+  it("normalizes discovery failures without leaking database password or name", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => {
+        throw Object.assign(new Error("Cannot inspect pharmacy using super-secret-password"), {
+          code: "ER_TABLEACCESS_DENIED_ERROR"
+        });
+      }),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    try {
+      await adapter.listTables();
+    } catch (error) {
+      expect(error).toBeInstanceOf(DatabaseOperationError);
+      expect(error).toMatchObject({
+        driver: "mysql",
+        operation: "listTables",
+        errorCode: "MYSQL_ER_TABLEACCESS_DENIED_ERROR"
+      });
+      expect(String(error)).not.toContain("super-secret-password");
+      expect(String(error)).not.toContain("pharmacy");
+      expect(String(error)).toContain("[REDACTED]");
+    }
+  });
+
+  it("normalizes column discovery failures without leaking database password or name", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => {
+        throw Object.assign(new Error("Cannot inspect pharmacy.products using super-secret-password"), {
+          code: "ER_BAD_FIELD_ERROR"
+        });
+      }),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    try {
+      await adapter.listColumns("products");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DatabaseOperationError);
+      expect(error).toMatchObject({
+        driver: "mysql",
+        operation: "listColumns",
+        errorCode: "MYSQL_ER_BAD_FIELD_ERROR"
+      });
+      expect(String(error)).not.toContain("super-secret-password");
+      expect(String(error)).not.toContain("pharmacy");
+      expect(String(error)).toContain("[REDACTED]");
+    }
+  });
+
   it("normalizes connection failures without leaking database password", async () => {
     const adapter = new MySqlSourceAdapter({
       config,

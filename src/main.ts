@@ -1,13 +1,22 @@
-import { config as loadDotEnvFile } from "dotenv";
 import { loadConfig, configSecrets, ConfigValidationError } from "./config/env.js";
+import { ProgramDataConfigError } from "./config/programdata-config.js";
+import {
+  buildStartupConfigSourceMetadata,
+  resolveStartupEnvironment,
+  type ResolveStartupEnvironmentOptions
+} from "./config/startup-env.js";
 import { createLogger } from "./logging/logger.js";
 import { redactValue } from "./logging/redact.js";
 import { registerShutdownHandlers } from "./service/shutdown.js";
 import { startConnectorRuntime } from "./service/runtime.js";
 import { CONNECTOR_VERSION } from "./version.js";
 
-export function validateStartup(env: NodeJS.ProcessEnv = process.env): void {
-  const config = loadConfig(resolveRuntimeEnv(env));
+export async function validateStartup(
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolveStartupEnvironmentOptions = {}
+): Promise<void> {
+  const startupEnv = await resolveStartupEnvironment(env, options);
+  const config = loadConfig(startupEnv.env);
   const logger = createLogger({
     level: config.logLevel,
     secrets: configSecrets(config)
@@ -15,7 +24,8 @@ export function validateStartup(env: NodeJS.ProcessEnv = process.env): void {
 
   logger.info("service.startup", {
     version: CONNECTOR_VERSION,
-    dbDriver: config.database.driver
+    dbDriver: config.database.driver,
+    ...buildStartupConfigSourceMetadata(startupEnv)
   });
   logger.info("configuration.loaded", {
     websocketUrl: config.websocketUrl,
@@ -27,9 +37,12 @@ export function validateStartup(env: NodeJS.ProcessEnv = process.env): void {
   });
 }
 
-export function runMain(env: NodeJS.ProcessEnv = process.env): number {
+export async function runMain(
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolveStartupEnvironmentOptions = {}
+): Promise<number> {
   try {
-    validateStartup(env);
+    await validateStartup(env, options);
     return 0;
   } catch (error) {
     const logger = createLogger({ level: "info" });
@@ -42,6 +55,14 @@ export function runMain(env: NodeJS.ProcessEnv = process.env): number {
       return 1;
     }
 
+    if (error instanceof ProgramDataConfigError) {
+      logger.error("unrecoverable.startup_error", {
+        errorCode: "PROGRAMDATA_CONFIG_FAILED",
+        error: redactValue(error.message)
+      });
+      return 1;
+    }
+
     logger.error("unrecoverable.startup_error", {
       errorCode: "STARTUP_FAILED",
       error: redactValue(error instanceof Error ? error.message : String(error))
@@ -50,9 +71,13 @@ export function runMain(env: NodeJS.ProcessEnv = process.env): number {
   }
 }
 
-export async function runServiceMain(env: NodeJS.ProcessEnv = process.env): Promise<number> {
+export async function runServiceMain(
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolveStartupEnvironmentOptions = {}
+): Promise<number> {
   try {
-    const runtime = await startConnectorRuntime({ env: resolveRuntimeEnv(env) });
+    const startupEnv = await resolveStartupEnvironment(env, options);
+    const runtime = await startConnectorRuntime({ env: startupEnv.env });
     registerShutdownHandlers(runtime);
     return 0;
   } catch (error) {
@@ -66,6 +91,14 @@ export async function runServiceMain(env: NodeJS.ProcessEnv = process.env): Prom
       return 1;
     }
 
+    if (error instanceof ProgramDataConfigError) {
+      logger.error("unrecoverable.startup_error", {
+        errorCode: "PROGRAMDATA_CONFIG_FAILED",
+        error: redactValue(error.message)
+      });
+      return 1;
+    }
+
     logger.error("unrecoverable.startup_error", {
       errorCode: "STARTUP_FAILED",
       error: redactValue(error instanceof Error ? error.message : String(error))
@@ -74,18 +107,9 @@ export async function runServiceMain(env: NodeJS.ProcessEnv = process.env): Prom
   }
 }
 
-function resolveRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (env === process.env) {
-    loadDotEnvFile();
-    return process.env;
-  }
-
-  return env;
-}
-
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (process.env.CONNECTOR_VALIDATE_ONLY === "1") {
-    process.exitCode = runMain(process.env);
+    process.exitCode = await runMain(process.env);
   } else {
     process.exitCode = await runServiceMain(process.env);
   }

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Fragment>
+    <ComponentGroup Id="ConnectorServiceComponents" Directory="INSTALLFOLDER">
+      <Component Id="ConnectorWindowsService" Guid="C1D2E3F4-A5B6-4789-ABCD-EF0123456789">
+        <File Id="NodeExe" Name="node.exe" Source="$(var.StagingDir)\node.exe" KeyPath="yes" />
+        <ServiceInstall Id="ConnectorServiceInstall"
+                        Name="$(var.ServiceName)"
+                        DisplayName="$(var.ServiceDisplayName)"
+                        Description="$(var.ServiceDescription)"
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Vital="yes"
+                        Arguments="&quot;[INSTALLFOLDER]$(var.ServiceEntrypoint)&quot;" />
+        <ServiceControl Id="ConnectorServiceControl"
+                        Name="$(var.ServiceName)"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+        <util:ServiceConfig Name="$(var.ServiceName)"
+                            FirstFailureActionType="restart"
+                            SecondFailureActionType="restart"
+                            ThirdFailureActionType="none"
+                            ResetPeriodInDays="1"
+                            RestartServiceDelayInSeconds="60" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

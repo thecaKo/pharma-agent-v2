@@ -7,10 +7,22 @@ export interface QueryChangesInput {
   limit: number;
 }
 
+export interface DatabaseTable {
+  name: string;
+}
+
+export interface DatabaseColumn {
+  name: string;
+  dataType?: string;
+  nullable?: boolean;
+}
+
 export interface SourceDatabaseAdapter {
   connect(): Promise<void>;
   close(): Promise<void>;
   queryChanges(input: QueryChangesInput): Promise<SourceRow[]>;
+  listTables(): Promise<DatabaseTable[]>;
+  listColumns(tableName: string): Promise<DatabaseColumn[]>;
 }
 
 export type SourceDatabaseAdapterKind = "mysql" | "firebird";

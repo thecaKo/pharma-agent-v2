@@ -4,6 +4,7 @@ export interface ConnectorState {
   connectorId?: string;
   customerId?: string;
   mappingVersion?: string;
+  selectedProductTable?: string;
   cursorField?: string;
   cursorType?: CursorValue extends number ? never : "timestamp" | "number";
   sourceProductCodeField?: string;
