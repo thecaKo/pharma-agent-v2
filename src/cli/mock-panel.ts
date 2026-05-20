@@ -4,13 +4,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { ValidatedMappingConfig } from "../mapping/types.js";
+import { serializeServerMessage, type ConnectorConfigMessage } from "../transport/protocol.js";
 import {
-  buildAdminRequestMessage,
-  parseAdminResponseMessage,
-  serializeServerMessage,
-  type AdminResponseMessage,
-  type ConnectorConfigMessage
-} from "../transport/protocol.js";
+  SCHEMA_TABLES_LIST_COMMAND_TYPE,
+  sanitizeSchemaDiscoveryTables,
+  tryParseSchemaTablesListResult,
+  type SchemaDiscoveryColumn,
+  type SchemaDiscoveryTable
+} from "../transport/schema-discovery.js";
 import { DEFAULT_ONBOARDING_ARTIFACT_FILE_PATH } from "./database-setup.js";
 import { loadValidatedMappingFromOnboardingArtifactFile } from "./onboarding-artifact-loader.js";
 
@@ -47,6 +48,7 @@ export interface MockPanelCliIo {
 
 export interface DiscoveryResult {
   tables: string[];
+  schema: SchemaDiscoveryTable[];
 }
 
 export interface PanelSelectionHistoryEntry {
@@ -57,6 +59,7 @@ export interface PanelSelectionHistoryEntry {
 export interface PanelSimState {
   selectedProductTable?: string;
   discoveredTables?: string[];
+  discoveredSchema?: SchemaDiscoveryTable[];
   history: PanelSelectionHistoryEntry[];
 }
 
@@ -193,7 +196,8 @@ export async function runMockPanelCli(argv: readonly string[], io: MockPanelCliI
         const result = await discoverTables(options, io);
         await savePanelSimState(options.stateFilePath, {
           ...(await loadPanelSimState(options.stateFilePath)),
-          discoveredTables: result.tables
+          discoveredTables: result.tables,
+          discoveredSchema: result.schema
         });
         for (const table of result.tables) {
           io.stdout.write(`${table}\n`);
@@ -263,17 +267,13 @@ export async function discoverTables(
   try {
     await server.listen();
     const requestId = io.requestId?.() ?? `schema-listTables-${Date.now()}`;
-    const response = await server.sendDiscoveryRequest({
-      requestId,
-      sentAt: io.now?.() ?? new Date().toISOString()
+    const schema = await server.sendDiscoveryRequest({
+      correlationId: requestId
     });
 
-    if (!response.ok) {
-      throw new Error(`Discovery failed: ${response.error.errorCode}`);
-    }
-
     return {
-      tables: [...response.payload.tables].sort((left, right) => left.localeCompare(right))
+      tables: schema.map((table) => table.name),
+      schema
     };
   } finally {
     await server.close();
@@ -471,7 +471,14 @@ export class MockPanelServer {
   private readonly options: MockPanelServerOptions;
   private server?: WebSocketServer;
   private connector?: WebSocket;
-  private readonly pendingResponses = new Map<string, (response: AdminResponseMessage) => void>();
+  private readonly pendingSchemaListResponses = new Map<
+    string,
+    {
+      timeout: ReturnType<typeof setTimeout>;
+      resolve: (tables: SchemaDiscoveryTable[]) => void;
+      reject: (error: Error) => void;
+    }
+  >();
 
   public constructor(options: MockPanelServerOptions) {
     this.options = options;
@@ -507,29 +514,18 @@ export class MockPanelServer {
     return `ws://${this.options.host}:${address.port}`;
   }
 
-  public async sendDiscoveryRequest(input: { requestId: string; sentAt: string }): Promise<AdminResponseMessage> {
+  public async sendDiscoveryRequest(input: { correlationId: string }): Promise<SchemaDiscoveryTable[]> {
+    const correlationId = input.correlationId;
     const connector = await this.waitForConnector();
-    const request = buildAdminRequestMessage(
-      {
-        requestId: input.requestId,
-        command: "schema.listTables"
-      },
-      input.sentAt
-    );
-
-    const response = new Promise<AdminResponseMessage>((resolve, reject) => {
+    const response = new Promise<SchemaDiscoveryTable[]>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        this.pendingResponses.delete(request.requestId);
-        reject(new Error(`Timed out waiting for schema.listTables response (${this.options.timeoutMs} ms).`));
+        this.pendingSchemaListResponses.delete(correlationId);
+        reject(new Error(`Timed out waiting for schema.tables.list.result (${this.options.timeoutMs} ms).`));
       }, this.options.timeoutMs);
-
-      this.pendingResponses.set(request.requestId, (message) => {
-        clearTimeout(timeout);
-        resolve(message);
-      });
+      this.pendingSchemaListResponses.set(correlationId, { timeout, resolve, reject });
     });
 
-    connector.send(serializeServerMessage(request));
+    connector.send(JSON.stringify({ type: SCHEMA_TABLES_LIST_COMMAND_TYPE, id: correlationId }));
     return response;
   }
 
@@ -539,20 +535,11 @@ export class MockPanelServer {
   }
 
   public async close(): Promise<void> {
-    for (const resolve of this.pendingResponses.values()) {
-      resolve({
-        type: "admin.response",
-        requestId: "closed",
-        command: "schema.listTables",
-        ok: false,
-        error: {
-          errorCode: "MOCK_PANEL_CLOSED",
-          message: "Mock panel closed"
-        },
-        sentAt: new Date().toISOString()
-      });
+    for (const pending of this.pendingSchemaListResponses.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("Mock panel closed"));
     }
-    this.pendingResponses.clear();
+    this.pendingSchemaListResponses.clear();
 
     for (const client of this.server?.clients ?? []) {
       client.terminate();
@@ -598,19 +585,18 @@ export class MockPanelServer {
   }
 
   private handleMessage(data: RawData): void {
-    let message: AdminResponseMessage;
-    try {
-      message = parseAdminResponseMessage(data);
-    } catch {
+    const legacy = tryParseSchemaTablesListResult(data);
+    if (!legacy) {
       return;
     }
 
-    const resolve = this.pendingResponses.get(message.requestId);
-    if (!resolve) {
+    const pending = this.pendingSchemaListResponses.get(legacy.id);
+    if (!pending) {
       return;
     }
-    this.pendingResponses.delete(message.requestId);
-    resolve(message);
+    clearTimeout(pending.timeout);
+    this.pendingSchemaListResponses.delete(legacy.id);
+    pending.resolve(legacy.tables);
   }
 }
 
@@ -693,6 +679,30 @@ function defaultIo(): MockPanelCliIo {
   };
 }
 
+function normalizeDiscoveredSchema(value: unknown): SchemaDiscoveryTable[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const loosely = value
+    .filter(isRecord)
+    .map(
+      (table): SchemaDiscoveryTable => ({
+        name: typeof table.name === "string" ? table.name : "",
+        columns: Array.isArray(table.columns)
+          ? table.columns.filter(isRecord).map(
+              (column): SchemaDiscoveryColumn => ({
+                name: typeof column.name === "string" ? column.name : "",
+                type: typeof column.type === "string" ? column.type : "",
+                ...(typeof column.nullable === "boolean" ? { nullable: column.nullable } : {})
+              })
+            )
+          : []
+      })
+    );
+  const sanitized = sanitizeSchemaDiscoveryTables(loosely);
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
 function normalizePanelSimState(value: unknown): PanelSimState {
   if (!isRecord(value)) {
     return emptyPanelSimState();
@@ -702,6 +712,7 @@ function normalizePanelSimState(value: unknown): PanelSimState {
   const discoveredTables = Array.isArray(value.discoveredTables)
     ? uniqueSortedStrings(value.discoveredTables)
     : undefined;
+  const discoveredSchema = normalizeDiscoveredSchema(value.discoveredSchema);
   const history = Array.isArray(value.history)
     ? value.history
         .filter(isRecord)
@@ -715,6 +726,7 @@ function normalizePanelSimState(value: unknown): PanelSimState {
   return {
     ...(selectedProductTable ? { selectedProductTable } : {}),
     ...(discoveredTables ? { discoveredTables } : {}),
+    ...(discoveredSchema ? { discoveredSchema } : {}),
     history
   };
 }

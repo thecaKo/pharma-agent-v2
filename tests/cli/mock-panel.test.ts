@@ -15,12 +15,11 @@ import {
   selectProductTable,
   startMockPanelServeServer
 } from "../../src/cli/mock-panel.js";
+import { buildAdminErrorResponseMessage, parseServerMessage, serializeConnectorMessage } from "../../src/transport/protocol.js";
 import {
-  buildAdminErrorResponseMessage,
-  buildAdminSuccessResponseMessage,
-  parseServerMessage,
-  serializeConnectorMessage
-} from "../../src/transport/protocol.js";
+  buildSchemaTablesListResult,
+  serializeSchemaTablesListResult
+} from "../../src/transport/schema-discovery.js";
 import { validMapping } from "../helpers/mapping.js";
 
 const clients: WebSocket[] = [];
@@ -212,7 +211,7 @@ describe("mock panel CLI", () => {
     ).rejects.toThrow("Unknown product table");
   });
 
-  it("sends schema.listTables as a correlated admin request", async () => {
+  it("sends schema.tables.list with a correlated id", async () => {
     const server = new MockPanelServer({ host: "127.0.0.1", port: 0, timeoutMs: 500 });
     await server.listen();
 
@@ -220,36 +219,26 @@ describe("mock panel CLI", () => {
       const client = await connectClient(server.url());
       const received = onceMessage(client);
       const discovery = server.sendDiscoveryRequest({
-        requestId: "req-test",
-        sentAt: "2026-05-16T20:00:00.000Z"
+        correlationId: "req-test"
       });
 
       expect(JSON.parse(await received)).toEqual({
-        type: "admin.request",
-        requestId: "req-test",
-        command: "schema.listTables",
-        sentAt: "2026-05-16T20:00:00.000Z"
+        type: "schema.tables.list",
+        id: "req-test"
       });
 
       client.send(
-        serializeConnectorMessage(
-          buildAdminSuccessResponseMessage(
-            {
-              requestId: "req-test",
-              command: "schema.listTables",
-              tables: ["products"]
-            },
-            "2026-05-16T20:00:01.000Z"
-          )
+        serializeSchemaTablesListResult(
+          buildSchemaTablesListResult({
+            correlationId: "req-test",
+            tables: [{ name: "products", columns: [{ name: "id", type: "int" }] }]
+          })
         )
       );
 
-      await expect(discovery).resolves.toMatchObject({
-        ok: true,
-        payload: {
-          tables: ["products"]
-        }
-      });
+      await expect(discovery).resolves.toEqual([
+        { name: "products", columns: [{ name: "id", type: "int" }] }
+      ]);
     } finally {
       await server.close();
     }
@@ -266,17 +255,22 @@ describe("mock panel CLI", () => {
     });
 
     const { client, firstMessage } = await connectClientWithFirstMessage(`ws://127.0.0.1:${port}`);
-    const request = JSON.parse(await firstMessage) as { requestId: string };
+    const request = JSON.parse(await firstMessage) as { id: string };
     client.send(
-      serializeConnectorMessage(
-        buildAdminSuccessResponseMessage(
-          {
-            requestId: request.requestId,
-            command: "schema.listTables",
-            tables: ["products", "inventory"]
-          },
-          "2026-05-16T20:00:01.000Z"
-        )
+      serializeSchemaTablesListResult(
+        buildSchemaTablesListResult({
+          correlationId: request.id,
+          tables: [
+            {
+              name: "products",
+              columns: [{ name: "sku", type: "varchar" }]
+            },
+            {
+              name: "inventory",
+              columns: [{ name: "qty", type: "int" }]
+            }
+          ]
+        })
       )
     );
 
@@ -286,7 +280,11 @@ describe("mock panel CLI", () => {
     expect(output.stdoutText()).not.toContain("columns");
     expect(output.stdoutText()).not.toContain("rowCount");
     await expect(loadPanelSimState(stateFile)).resolves.toMatchObject({
-      discoveredTables: ["inventory", "products"]
+      discoveredTables: ["inventory", "products"],
+      discoveredSchema: [
+        { name: "inventory", columns: [{ name: "qty", type: "int" }] },
+        { name: "products", columns: [{ name: "sku", type: "varchar" }] }
+      ]
     });
   });
 
@@ -412,7 +410,7 @@ describe("mock panel CLI", () => {
     expect(output.stderrText()).toContain("No connector connected before timeout");
   });
 
-  it("returns non-zero for admin errors without printing message content", async () => {
+  it("returns non-zero when the connector sends no schema.tables.list.result (timeout)", async () => {
     const port = await freePort();
     const output = createBufferedOutput();
     const run = runMockPanelCli(["discover", "--port", String(port), "--timeout-ms", "500"], {
@@ -422,12 +420,12 @@ describe("mock panel CLI", () => {
     });
 
     const { client, firstMessage } = await connectClientWithFirstMessage(`ws://127.0.0.1:${port}`);
-    const request = JSON.parse(await firstMessage) as { requestId: string };
+    await firstMessage;
     client.send(
       serializeConnectorMessage(
         buildAdminErrorResponseMessage(
           {
-            requestId: request.requestId,
+            requestId: "req-error",
             command: "schema.listTables",
             errorCode: "TABLE_DISCOVERY_FAILED",
             message: "Database password secret-password failed"
@@ -439,7 +437,7 @@ describe("mock panel CLI", () => {
 
     await expect(run).resolves.toBe(1);
     expect(output.stdoutText()).toBe("");
-    expect(output.stderrText()).toContain("Discovery failed: TABLE_DISCOVERY_FAILED");
+    expect(output.stderrText()).toContain("Timed out waiting for schema.tables.list.result");
     expect(output.stderrText()).not.toContain("secret-password");
     expect(output.stderrText()).not.toContain("Database password");
   });
@@ -462,29 +460,31 @@ describe("mock panel CLI", () => {
     );
 
     const { client, firstMessage } = await connectClientWithFirstMessage(`ws://127.0.0.1:${port}`);
-    const request = JSON.parse(await firstMessage) as { requestId: string; command: "schema.listTables" };
+    const request = JSON.parse(await firstMessage) as { id: string; type: string };
 
     expect(request).toMatchObject({
-      type: "admin.request",
-      requestId: "req-integration",
-      command: "schema.listTables"
+      type: "schema.tables.list",
+      id: "req-integration"
     });
 
     client.send(
-      serializeConnectorMessage(
-        buildAdminSuccessResponseMessage(
-          {
-            requestId: request.requestId,
-            command: request.command,
-            tables: ["produto", "estoque"]
-          },
-          "2026-05-16T20:00:01.000Z"
-        )
+      serializeSchemaTablesListResult(
+        buildSchemaTablesListResult({
+          correlationId: request.id,
+          tables: [
+            { name: "produto", columns: [{ name: "a", type: "int" }] },
+            { name: "estoque", columns: [{ name: "b", type: "int" }] }
+          ]
+        })
       )
     );
 
     await expect(discovery).resolves.toEqual({
-      tables: ["estoque", "produto"]
+      tables: ["estoque", "produto"],
+      schema: [
+        { name: "estoque", columns: [{ name: "b", type: "int" }] },
+        { name: "produto", columns: [{ name: "a", type: "int" }] }
+      ]
     });
   });
 

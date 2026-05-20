@@ -43,6 +43,24 @@ describe("manual system test documentation consistency", () => {
     expect(manual).toContain("`DB_PASSWORD`");
   });
 
+  it("documents production central panel config push smoke with timing and failure flows", async () => {
+    const manual = await readFile(join(projectRoot, "docs/manual-system-tests.md"), "utf8");
+    const flattened = manual.replace(/\s+/g, " ");
+
+    expect(manual).toContain("## Production Central Panel Config Push Smoke");
+    expect(flattened).toContain("connector.config");
+    expect(flattened).toContain("mapping.active");
+    expect(flattened).toContain("product.batch");
+    expect(flattened).toContain("batch.ack");
+    expect(flattened).toContain("connector.error");
+    expect(flattened).toContain("30-second");
+    expect(flattened).toContain("lastAckedCursor");
+    expect(flattened).toContain("CONFIG_VALIDATION_FAILED");
+    expect(flattened).toMatch(/development\/simulator-only/i);
+    expect(flattened).toMatch(/mock-panel serve/i);
+    expect(flattened).toMatch(/healthy ERP/i);
+  });
+
   it("aligns manual installer checks with installer-first Windows service documentation", async () => {
     const manual = await readFile(join(projectRoot, "docs/manual-system-tests.md"), "utf8");
     const windowsService = await readFile(join(projectRoot, "docs/windows-service.md"), "utf8");

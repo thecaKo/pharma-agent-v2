@@ -90,7 +90,46 @@ Use only when the WiX installer cannot run. See `docs/windows-service.md` (**Pow
 4. Return an accepted `batch.ack`.
 5. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-state.json` advances `lastAckedCursor` only after the acknowledgement and updates `lastSuccessfulSendAt`.
 
+## Production Central Panel Config Push Smoke
+
+Use this checklist at customer go-live when validating mapping pushed from the **central panel** (neo-api complete `connector.config` payload). This is the production path. Do **not** substitute **`npm run mock-panel -- serve`** here—that flow is a **development/simulator-only** path documented in **Mock Panel CLI Flow** and does not prove panel-owned config delivery.
+
+### Preconditions
+
+1. Pharma Agent Connector service running and started successfully after database onboarding.
+2. ERP database reachable from the connector host with the read-only user configured at install time.
+3. Valid `CONNECTOR_TOKEN` and `CONNECTOR_WS_URL` pointing at the production central WebSocket endpoint.
+4. Complete customer-specific product mapping published from the central panel (incremental query, cursor metadata, field mappings, selected product table).
+5. Healthy network between connector host, central platform, and ERP.
+
+### Valid config push (primary flow)
+
+1. Confirm the connector service is online and the central panel shows a connected WebSocket session (heartbeat with online state).
+2. Publish the complete `connector.config` from the central panel for this customer connector.
+3. Note the wall-clock time when the panel publish completes.
+4. In connector/service logs, confirm `mapping.active` with the expected `selectedProductTable`, `cursorField`, and related mapping metadata from the pushed config.
+5. Make a small, known change to one or two product rows in the source ERP table covered by the mapping.
+6. Confirm the connector sends the first `product.batch` for that mapping after the change (or on the scheduled poll when your fixture already has pending rows).
+7. From the central panel or compatible tooling, return an accepted `batch.ack` for that batch.
+8. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-state.json` advances `lastAckedCursor` only after the acknowledgement and updates `lastSuccessfulSendAt`.
+
+### Timing measurement (30-second target)
+
+1. Measure elapsed time from panel config publish completion to the first observed `mapping.active` log or event.
+2. Measure elapsed time from the same publish completion (or from `mapping.active`, if your runbook separates activation from batch) to the first `product.batch`.
+3. The **30-second** target applies **only** under healthy ERP, network, and connector process conditions; slow ERPs, intermittent networks, or service restarts during the test are out of scope for this SLA.
+4. The connector does **not** enforce a runtime 30-second deadline; missed timing during smoke is a signal to recheck preconditions and ERP performance, not an automatic connector failure.
+
+### Invalid config push (failure flow)
+
+1. From the panel, publish an intentionally incomplete `connector.config` (for example missing `mapping.incrementalQuery`, invalid cursor type, or incomplete field mappings) in a controlled test window after coordinating with the platform team.
+2. Confirm the central panel or WebSocket trace shows an immediate `connector.error` (typically `CONFIG_VALIDATION_FAILED`) with a field-specific validation message suitable for support tickets.
+3. Confirm connector logs do **not** show `mapping.active`, polling does not start, and no `product.batch` is sent for that invalid push.
+4. Fix the mapping in the panel, republish a complete config, and repeat the valid config push steps above.
+
 ## Mock Panel CLI Flow
+
+**Development/simulator only.** Production go-live validation uses the **Production Central Panel Config Push Smoke** checklist above, not this section.
 
 These steps assume you already completed **`npm run database-setup --`** locally so
 `~/.pharma-agent/database-setup.json` captures the validated table and field
