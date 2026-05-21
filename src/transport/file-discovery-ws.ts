@@ -1,5 +1,11 @@
-import { lstat, readdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import {
+  DATABASE_FILE_DISCOVERY_MAX_CANDIDATES,
+  discoverDatabaseFiles,
+  resolveDatabaseDiscoveryRoots,
+  type DatabaseFileCandidate
+} from "../db/file-discovery.js";
 import { ProtocolParseError } from "./protocol.js";
 
 export const FILE_DISCOVERY_SCAN_COMMAND_TYPE = "file-discovery.scan";
@@ -94,95 +100,62 @@ export function serializeFileDiscoveryScanResult(message: FileDiscoveryScanResul
 }
 
 export async function scanLocalFilesystem(
-  workspaceRootResolved: string
+  rootPath?: string
 ): Promise<{ ok: true; entries: FileDiscoveryScanEntryWire[] } | { ok: false; failureReason: string }> {
-  let rootResolved: string;
-  try {
-    rootResolved = path.resolve(workspaceRootResolved);
-  } catch {
-    return { ok: false, failureReason: "Invalid root path" };
-  }
+  const trimmedRoot = typeof rootPath === "string" ? rootPath.trim() : "";
 
-  let rootStat;
-  try {
-    rootStat = await stat(rootResolved);
-  } catch {
-    return { ok: false, failureReason: "Unable to access root directory" };
-  }
-
-  if (!rootStat.isDirectory()) {
-    return { ok: false, failureReason: "Root path is not a directory" };
-  }
-
-  const entries: FileDiscoveryScanEntryWire[] = [];
-  const stack = [rootResolved];
-
-  try {
-    while (stack.length > 0 && entries.length < FILE_DISCOVERY_MAX_ENTRIES) {
-      const currentDir = stack.pop()!;
-      let dirents;
-      try {
-        dirents = await readdir(currentDir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-
-      dirents.sort((a, b) => a.name.localeCompare(b.name));
-
-      for (const dirent of dirents) {
-        if (entries.length >= FILE_DISCOVERY_MAX_ENTRIES) {
-          break;
-        }
-
-        const full = path.join(currentDir, dirent.name);
-        let stats;
-        try {
-          stats = await lstat(full);
-        } catch {
-          continue;
-        }
-
-        const clippedPath = clipString(full.trim(), FILE_DISCOVERY_MAX_PATH_LENGTH);
-        if (!clippedPath) {
-          continue;
-        }
-
-        const symlink = stats.isSymbolicLink();
-
-        let nameWire: string | null | undefined;
-        const clippedName = clipString(dirent.name.trim(), FILE_DISCOVERY_MAX_NAME_LENGTH);
-        nameWire = clippedName.length === 0 ? null : clippedName;
-
-        const wire: FileDiscoveryScanEntryWire = {
-          path: clippedPath,
-          name: nameWire
-        };
-
-        if (symlink) {
-          wire.isDirectory = null;
-          wire.sizeBytes = boundedFileSize(stats);
-        } else if (stats.isDirectory()) {
-          wire.isDirectory = true;
-          wire.sizeBytes = null;
-          stack.push(full);
-        } else if (stats.isFile()) {
-          wire.isDirectory = false;
-          wire.sizeBytes = boundedFileSize(stats);
-        } else {
-          wire.isDirectory = false;
-          wire.sizeBytes = null;
-        }
-
-        entries.push(wire);
-      }
+  let roots: string[];
+  if (trimmedRoot.length > 0) {
+    try {
+      roots = [path.resolve(trimmedRoot)];
+    } catch {
+      return { ok: false, failureReason: "Invalid root path" };
     }
+
+    try {
+      const rootStat = await stat(roots[0]);
+      if (!rootStat.isDirectory()) {
+        return { ok: false, failureReason: "Root path is not a directory" };
+      }
+    } catch {
+      return { ok: false, failureReason: "Unable to access root directory" };
+    }
+  } else {
+    roots = resolveDatabaseDiscoveryRoots();
+  }
+
+  try {
+    const discovery = await discoverDatabaseFiles({
+      roots,
+      maxCandidates: FILE_DISCOVERY_MAX_ENTRIES
+    });
+
+    const entries = databaseCandidatesToWireEntries(discovery.candidates);
+    return { ok: true, entries };
   } catch {
     return { ok: false, failureReason: "Directory scan failed" };
   }
+}
 
-  entries.sort((a, b) => a.path.localeCompare(b.path));
+function databaseCandidatesToWireEntries(
+  candidates: readonly DatabaseFileCandidate[]
+): FileDiscoveryScanEntryWire[] {
+  return candidates.map((candidate) => {
+    const clippedPath = clipString(candidate.path.trim(), FILE_DISCOVERY_MAX_PATH_LENGTH);
+    const clippedName = clipString(path.basename(candidate.path).trim(), FILE_DISCOVERY_MAX_NAME_LENGTH);
 
-  return { ok: true, entries };
+    const entry: FileDiscoveryScanEntryWire = {
+      path: clippedPath,
+      name: clippedName.length === 0 ? null : clippedName,
+      isDirectory: false
+    };
+
+    if (candidate.sizeBytes !== undefined && candidate.sizeBytes !== null) {
+      entry.sizeBytes = candidate.sizeBytes;
+    }
+
+    return entry;
+  });
 }
 
 function sanitizeDiscoveryEntries(entries: readonly FileDiscoveryScanEntryWire[]): FileDiscoveryScanEntryWire[] {
@@ -229,15 +202,6 @@ function sanitizeDiscoveryEntries(entries: readonly FileDiscoveryScanEntryWire[]
 
   out.sort((left, right) => left.path.localeCompare(right.path));
   return out;
-}
-
-function boundedFileSize(stats: import("node:fs").Stats): number | null {
-  const sizeNum = stats.size;
-  if (typeof sizeNum !== "number" || !Number.isFinite(sizeNum) || sizeNum < 0) {
-    return null;
-  }
-
-  return sizeNum > Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : Math.trunc(sizeNum);
 }
 
 function clipFailureReason(reason: string): string {

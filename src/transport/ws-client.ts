@@ -262,6 +262,7 @@ export class WebSocketTransportClient extends EventEmitter {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let opened = false;
       const socket = this.socketFactory(this.url, {
         headers: {
           Authorization: `Bearer ${this.connectorToken}`
@@ -271,6 +272,7 @@ export class WebSocketTransportClient extends EventEmitter {
 
       socket.once("open", () => {
         settled = true;
+        opened = true;
         this.reconnectAttemptCount = 0;
         this.logger.info("websocket connected", { url: this.url });
         this.emit("connected");
@@ -298,7 +300,7 @@ export class WebSocketTransportClient extends EventEmitter {
           settled = true;
           reject(new Error(`WebSocket closed before opening: ${code}`));
         }
-        if (!this.stopped && this.socket === socket) {
+        if (opened && !this.stopped && this.socket === socket) {
           this.scheduleReconnect();
         }
       });

@@ -74,15 +74,18 @@ describe("file discovery ws protocol", () => {
     expect(message.entries).toEqual([]);
   });
 
-  it("scans bounded directory hierarchy", async () => {
+  it("returns only database file extensions from a bounded directory hierarchy", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "file-discovery-protocol-"));
     await mkdir(path.join(root, "a"), { recursive: true });
     await writeFile(path.join(root, "a", "x.txt"), "1");
+    await writeFile(path.join(root, "a", "pharmacy.fdb"), "1");
 
     const snapshot = await scanLocalFilesystem(root);
     expect(snapshot.ok).toBe(true);
     if (snapshot.ok) {
-      expect(snapshot.entries.some((entry) => entry.name === "x.txt")).toBe(true);
+      expect(snapshot.entries.some((entry) => entry.name === "x.txt")).toBe(false);
+      expect(snapshot.entries.some((entry) => entry.name === "pharmacy.fdb")).toBe(true);
+      expect(snapshot.entries.every((entry) => entry.isDirectory === false)).toBe(true);
     }
   });
 });
