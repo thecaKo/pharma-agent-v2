@@ -12,7 +12,7 @@ export const RUN_WINDOWS_INSTALLER_TESTS_ENV = "RUN_WINDOWS_INSTALLER_TESTS";
 export const PACKAGING_PREREQUISITES = [
   "Windows host (win32)",
   ".NET SDK 8+ with MSBuild on PATH (`dotnet` command)",
-  "WiX Toolset 4.x (restored through WixToolset.Sdk when building the installer projects)",
+  "WiX Toolset 5.x (restored through WixToolset.Sdk when building the installer projects)",
   "Built connector output in `dist/` (the packaging script runs `npm run build` first)",
   "Windows x64 `node.exe` copied into `installer/staging/node.exe` or supplied through NODE_EXE_PATH"
 ] as const;
@@ -73,8 +73,7 @@ export function resolveDotnetCommand(): string {
 
 export function assertDotnetAvailable(command = resolveDotnetCommand()): void {
   const result = spawnSync(command, ["--version"], {
-    encoding: "utf8",
-    shell: process.platform === "win32"
+    encoding: "utf8"
   });
 
   if (result.status !== 0) {
@@ -146,14 +145,13 @@ export function runInstallerBundleBuild(projectRoot: string): void {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
-    shell: process.platform === "win32",
     stdio: "pipe"
   });
 
   if (result.status !== 0) {
     const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
     throw new PackagingPrerequisiteError(
-      `WiX packaging failed. Confirm WiX Toolset 4.x is installed and that installer staging is complete.${detail ? `\n${detail}` : ""}`
+      `WiX packaging failed. Confirm WiX Toolset 5.x is installed and that installer staging is complete.${detail ? `\n${detail}` : ""}`
     );
   }
 }

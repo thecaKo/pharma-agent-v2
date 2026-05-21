@@ -22,7 +22,7 @@
                         Stop="both"
                         Remove="uninstall"
                         Wait="yes" />
-        <util:ServiceConfig Name="$(var.ServiceName)"
+        <util:ServiceConfig ServiceName="$(var.ServiceName)"
                             FirstFailureActionType="restart"
                             SecondFailureActionType="restart"
                             ThirdFailureActionType="none"

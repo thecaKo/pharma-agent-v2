@@ -85,7 +85,10 @@ export function validateWixWizardScope(combinedSource: string): string[] {
     errors.push("missing secure connector token property");
   }
 
-  if (combinedSource.includes('Type="Password"') === false) {
+  if (
+    combinedSource.includes('Password="yes"') === false &&
+    combinedSource.includes('Type="Password"') === false
+  ) {
     errors.push("missing masked connector token control");
   }
 

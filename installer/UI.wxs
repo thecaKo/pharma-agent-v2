@@ -13,7 +13,7 @@
         <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30"
                  Text="Enter the connector token and central WebSocket URL required for service startup." />
         <Control Id="TokenLabel" Type="Text" X="20" Y="85" Width="120" Height="15" Text="Connector token" />
-        <Control Id="TokenEdit" Type="Password" X="20" Y="100" Width="330" Height="18" Property="CONNECTOR_TOKEN" />
+        <Control Id="TokenEdit" Type="Edit" Password="yes" X="20" Y="100" Width="330" Height="18" Property="CONNECTOR_TOKEN" />
         <Control Id="WsUrlLabel" Type="Text" X="20" Y="130" Width="160" Height="15" Text="Central WebSocket URL" />
         <Control Id="WsUrlEdit" Type="Edit" X="20" Y="145" Width="330" Height="18" Property="CONNECTOR_WS_URL" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="Back" />

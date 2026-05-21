@@ -1,4 +1,4 @@
-<Project Sdk="WixToolset.Sdk/4.0.5">
+<Project Sdk="WixToolset.Sdk/5.0.0">
   <PropertyGroup>
     <OutputName>PharmaAgentConnector-Setup</OutputName>
     <OutputType>Bundle</OutputType>
@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="WixToolset.BootstrapperApplications.wixext" Version="4.0.5" />
+    <PackageReference Include="WixToolset.BootstrapperApplications.wixext" Version="5.0.0" />
   </ItemGroup>
 
   <ItemGroup>
