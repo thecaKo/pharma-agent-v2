@@ -648,14 +648,9 @@ function replyToProductBatch(socket: WebSocket, data: RawData): void {
     return;
   }
 
-  const batch = parsed.batch;
-  if (!isRecord(batch)) {
-    return;
-  }
-
-  const batchId = batch.batchId;
-  const records = batch.records;
-  if (typeof batchId !== "string" || batchId.trim().length === 0 || !Array.isArray(records)) {
+  const batchId = parsed.batchId;
+  const products = parsed.products;
+  if (typeof batchId !== "string" || batchId.trim().length === 0 || !Array.isArray(products)) {
     return;
   }
 
@@ -664,7 +659,7 @@ function replyToProductBatch(socket: WebSocket, data: RawData): void {
       type: "batch.ack",
       batchId,
       accepted: true,
-      acceptedRecordCount: records.length,
+      acceptedRecordCount: products.length,
       rejectedRecordCount: 0,
       nextAction: "continue",
       sentAt: new Date().toISOString()

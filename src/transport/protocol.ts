@@ -1,5 +1,6 @@
-import type { ValidatedMappingConfig } from "../mapping/types.js";
+import type { ProductChangeRecord, ValidatedMappingConfig } from "../mapping/types.js";
 import type { ProductChangeBatch } from "../poller/batch-builder.js";
+import type { CursorValue } from "../state/state-types.js";
 import { redactString } from "../logging/redact.js";
 import { normalizeCatalogConfigPushMessage } from "./catalog-config-push.js";
 
@@ -58,10 +59,26 @@ export interface ConnectorHeartbeatMessage {
   payload: HeartbeatPayload;
 }
 
+export interface ProductBatchWireProduct {
+  code: string;
+  name: string;
+  salePrice: number | null;
+  stockQuantity: number | null;
+  barcode?: string | null;
+  active?: boolean;
+  sourceUpdatedAt?: string;
+}
+
 export interface ProductBatchMessage {
   type: "product.batch";
   sentAt: string;
-  batch: ProductChangeBatch;
+  batchId: string;
+  mappingVersion: string;
+  cursor: {
+    before: CursorValue;
+    after: CursorValue;
+  };
+  products: ProductBatchWireProduct[];
 }
 
 export interface ConnectorErrorPayload {
@@ -214,8 +231,35 @@ export function buildProductBatchMessage(batch: ProductChangeBatch, sentAt = new
   return {
     type: "product.batch",
     sentAt,
-    batch
+    batchId: batch.batchId,
+    mappingVersion: batch.mappingVersion,
+    cursor: {
+      before: batch.cursorBefore,
+      after: batch.cursorAfter
+    },
+    products: batch.records.map(toProductBatchWireProduct)
   };
+}
+
+function toProductBatchWireProduct(record: ProductChangeRecord): ProductBatchWireProduct {
+  const product: ProductBatchWireProduct = {
+    code: record.sourceProductCode,
+    name: record.name,
+    salePrice: record.price,
+    stockQuantity: record.stock
+  };
+
+  if (record.barcode !== undefined) {
+    product.barcode = record.barcode;
+  }
+  if (record.active !== undefined) {
+    product.active = record.active;
+  }
+  if (record.sourceUpdatedAt !== undefined) {
+    product.sourceUpdatedAt = record.sourceUpdatedAt;
+  }
+
+  return product;
 }
 
 export function buildConnectorErrorMessage(
@@ -415,8 +459,8 @@ function parseMapping(value: unknown): ValidatedMappingConfig {
     fields: {
       sourceProductCode: expectString(fields.sourceProductCode, "mapping.fields.sourceProductCode"),
       name: expectString(fields.name, "mapping.fields.name"),
-      price: expectString(fields.price, "mapping.fields.price"),
-      stock: expectString(fields.stock, "mapping.fields.stock"),
+      price: optionalNullableString(fields.price, "mapping.fields.price"),
+      stock: optionalNullableString(fields.stock, "mapping.fields.stock"),
       barcode: optionalString(fields.barcode, "mapping.fields.barcode"),
       active: optionalString(fields.active, "mapping.fields.active"),
       sourceUpdatedAt: optionalString(fields.sourceUpdatedAt, "mapping.fields.sourceUpdatedAt")
@@ -481,6 +525,13 @@ function validateRequestId(value: string): string {
 
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) {
+    return undefined;
+  }
+  return expectString(value, field);
+}
+
+function optionalNullableString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) {
     return undefined;
   }
   return expectString(value, field);

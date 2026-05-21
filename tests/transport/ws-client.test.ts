@@ -513,11 +513,22 @@ describe("WebSocketTransportClient", () => {
 
     expect(batchMessage.parsed).toMatchObject({
       type: "product.batch",
-      batch: {
-        batchId: "batch-1",
-        cursorAfter: "101"
-      }
+      batchId: "batch-1",
+      mappingVersion: "mapping-v1",
+      cursor: {
+        before: "100",
+        after: "101"
+      },
+      products: [
+        {
+          code: "P-001",
+          name: "Dipirona 500mg",
+          salePrice: 12.5,
+          stockQuantity: 7
+        }
+      ]
     });
+    expect(batchMessage.parsed).not.toHaveProperty("batch");
     await expect(ackReceived).resolves.toMatchObject({
       type: "batch.ack",
       batchId: "batch-1",
@@ -701,6 +712,7 @@ describe("WebSocketTransportClient", () => {
       logger: createLogger({
         level: "debug",
         secrets: [token],
+        nodeEnv: "dev",
         output: {
           log: (message) => logs.push(String(message)),
           error: (message) => logs.push(String(message))

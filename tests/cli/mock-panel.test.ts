@@ -549,7 +549,7 @@ describe("mock panel CLI", () => {
       expect(message.mapping.incrementalQuery).toBe(incrementalQuery);
       expect(message.mapping.cursorField).toBe("row_id");
       expect(message.mapping.cursorType).toBe("number");
-      expect(message.mapping.batchSize).toBe(88);
+      expect(message.mapping.batchSize).toBe(500);
       expect(message.mapping.fields.sourceProductCode).toBe("cod");
       expect(message.mapping.fields.name).toBe("nm");
       expect(message.mapping.mappingVersion).toBe("local-onboarding-v1");
@@ -560,16 +560,13 @@ describe("mock panel CLI", () => {
         JSON.stringify({
           type: "product.batch",
           sentAt: "2026-05-18T12:05:00.000Z",
-          batch: {
-            batchId: "batch-xyz",
-            connectorId: "local-test-connector",
-            customerId: "local-test-customer",
-            mappingVersion: "local-onboarding-v1",
-            cursorBefore: null,
-            cursorAfter: null,
-            records: [{ sourceProductCode: "1", name: "n", price: 1, stock: 2 }],
-            createdAt: "2026-05-18T12:05:00.000Z"
-          }
+          batchId: "batch-xyz",
+          mappingVersion: "local-onboarding-v1",
+          cursor: {
+            before: null,
+            after: null
+          },
+          products: [{ code: "1", name: "n", salePrice: 1, stockQuantity: 2 }]
         })
       );
 

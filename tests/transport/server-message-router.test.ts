@@ -335,7 +335,11 @@ describe("server-message-router", () => {
       type: CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
       setupMethod: "file_discovery",
       driver: "firebird",
-      path: "/data/store.fdb"
+      path: "/data/store.fdb",
+      host: "127.0.0.1",
+      port: 3050,
+      username: "SYSDBA",
+      password: "masterkey"
     });
     const envelope = parseServerMessageEnvelope(payload);
 

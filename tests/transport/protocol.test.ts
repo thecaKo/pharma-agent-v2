@@ -5,6 +5,7 @@ import {
   buildAdminSuccessResponseMessage,
   buildConfigValidationConnectorError,
   buildConnectorErrorMessage,
+  buildProductBatchMessage,
   buildUnsupportedServerCommandRejection,
   CONFIG_VALIDATION_FAILED_ERROR_CODE,
   extractSafeConfigPushIdentity,
@@ -13,6 +14,7 @@ import {
   parseServerMessage,
   ProtocolParseError
 } from "../../src/transport/protocol.js";
+import { buildProductBatch } from "../../src/poller/batch-builder.js";
 import { validMapping } from "../helpers/mapping.js";
 
 describe("transport protocol", () => {
@@ -167,6 +169,31 @@ describe("transport protocol", () => {
       });
     });
 
+    it("accepts connector.config without price and stock field mappings", () => {
+      const mapping = validMapping();
+      delete (mapping.fields as Record<string, unknown>).price;
+      delete (mapping.fields as Record<string, unknown>).stock;
+
+      const parsed = parseServerMessage(
+        JSON.stringify({
+          type: "connector.config",
+          connectorId: "connector-1",
+          customerId: "customer-1",
+          mapping
+        })
+      );
+
+      expect(parsed).toMatchObject({
+        type: "connector.config",
+        mapping: {
+          fields: {
+            sourceProductCode: "product_id",
+            name: "description"
+          }
+        }
+      });
+    });
+
     it("does not include raw config payloads or secret-like values in parse errors", () => {
       const secretToken = "super-secret-connector-token";
       const secretPassword = "super-secret-db-password";
@@ -221,6 +248,69 @@ describe("transport protocol", () => {
       batchId: "batch-1",
       nextAction: "continue"
     });
+  });
+
+  it("builds product.batch messages in the neo-api wire format", () => {
+    const message = buildProductBatchMessage(
+      buildProductBatch({
+        batchId: "batch-1",
+        connectorId: "connector-1",
+        customerId: "customer-1",
+        mappingVersion: "mapping-v1",
+        cursorBefore: 0,
+        cursorAfter: 123,
+        createdAt: "2026-05-16T20:00:00.000Z",
+        records: [
+          {
+            sourceProductCode: "P-001",
+            name: "Dipirona 500mg",
+            price: 12.5,
+            stock: 7,
+            barcode: "7891234567890",
+            active: true,
+            sourceUpdatedAt: "2026-05-16T20:00:01.000Z"
+          },
+          {
+            sourceProductCode: "P-002",
+            name: "Sem preco/estoque",
+            price: null,
+            stock: null
+          }
+        ]
+      }),
+      "2026-05-16T20:00:01.000Z"
+    );
+
+    expect(message).toEqual({
+      type: "product.batch",
+      sentAt: "2026-05-16T20:00:01.000Z",
+      batchId: "batch-1",
+      mappingVersion: "mapping-v1",
+      cursor: {
+        before: 0,
+        after: 123
+      },
+      products: [
+        {
+          code: "P-001",
+          name: "Dipirona 500mg",
+          salePrice: 12.5,
+          stockQuantity: 7,
+          barcode: "7891234567890",
+          active: true,
+          sourceUpdatedAt: "2026-05-16T20:00:01.000Z"
+        },
+        {
+          code: "P-002",
+          name: "Sem preco/estoque",
+          salePrice: null,
+          stockQuantity: null
+        }
+      ]
+    });
+    expect(JSON.stringify(message)).not.toContain("\"batch\"");
+    expect(JSON.stringify(message)).not.toContain("sourceProductCode");
+    expect(JSON.stringify(message)).not.toContain("\"records\"");
   });
 
   it("rejects a batch.ack without batchId", () => {
