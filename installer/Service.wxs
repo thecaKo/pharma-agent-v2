@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <?include Variables.wxi ?>
   <Fragment>
     <ComponentGroup Id="ConnectorServiceComponents" Directory="INSTALLFOLDER">
       <Component Id="ConnectorWindowsService" Guid="C1D2E3F4-A5B6-4789-ABCD-EF0123456789">
-        <File Id="NodeExe" Name="node.exe" Source="$(var.StagingDir)\node.exe" KeyPath="yes" />
+        <File Id="NodeExe" Name="node.exe" Source="$(StagingDir)\node.exe" KeyPath="yes" />
         <ServiceInstall Id="ConnectorServiceInstall"
                         Name="$(var.ServiceName)"
                         DisplayName="$(var.ServiceDisplayName)"

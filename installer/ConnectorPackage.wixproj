@@ -2,8 +2,15 @@
   <PropertyGroup>
     <OutputName>PharmaAgentConnector</OutputName>
     <OutputType>Package</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <StagingDir Condition="'$(StagingDir)' == ''">$(MSBuildThisFileDirectory)staging</StagingDir>
+    <DefineConstants>StagingDir=$(StagingDir)</DefineConstants>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.5" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Include="Package.wxs" />

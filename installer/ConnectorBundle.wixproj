@@ -2,8 +2,12 @@
   <PropertyGroup>
     <OutputName>PharmaAgentConnector-Setup</OutputName>
     <OutputType>Bundle</OutputType>
-    <ConnectorMsiPath Condition="'$(ConnectorMsiPath)' == ''">$(MSBuildThisFileDirectory)bin\PharmaAgentConnector.msi</ConnectorMsiPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.BootstrapperApplications.wixext" Version="4.0.5" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Include="Bundle.wxs" />

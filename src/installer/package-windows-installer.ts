@@ -126,9 +126,17 @@ export function buildInstallerBundleCommand(projectRoot: string): {
   args: string[];
   cwd: string;
 } {
+  const stagingDir = join(projectRoot, "installer", "staging");
   return {
     command: resolveDotnetCommand(),
-    args: ["build", join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE), "-c", "Release"],
+    args: [
+      "build",
+      join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE),
+      "-c",
+      "Release",
+      "-restore",
+      `-p:StagingDir=${stagingDir}`
+    ],
     cwd: projectRoot
   };
 }

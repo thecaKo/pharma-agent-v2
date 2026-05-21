@@ -13,7 +13,7 @@
 
     <Chain>
       <MsiPackage Id="ConnectorMsi"
-                  SourceFile="$(var.ConnectorMsiPath)"
+                  SourceFile="$(ConnectorPackage.TargetPath)"
                   Vital="yes"
                   DisplayInternalUI="yes" />
     </Chain>

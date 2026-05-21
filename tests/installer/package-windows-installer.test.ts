@@ -55,7 +55,9 @@ describe("package-windows-installer", () => {
       "build",
       join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE),
       "-c",
-      "Release"
+      "Release",
+      "-restore",
+      `-p:StagingDir=${join(projectRoot, "installer", "staging")}`
     ]);
     expect(WINDOWS_INSTALLER_OUTPUT_RELATIVE).toBe("installer/bin/PharmaAgentConnector-Setup.exe");
     expect(WINDOWS_INSTALLER_PACKAGE_SCRIPT).toBe("package:windows-installer");

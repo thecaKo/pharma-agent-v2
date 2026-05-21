@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?include Variables.wxi ?>
   <Fragment>
     <DirectoryRef Id="ProgramDataConnectorFolder">
       <Component Id="ProgramDataConnectorConfig" Guid="F4A5B6C7-D8E9-4012-DEF0-123456789012">
