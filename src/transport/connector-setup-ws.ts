@@ -1,6 +1,5 @@
 import type { DatabaseConfig, DatabaseDriver } from "../config/types.js";
-import { connectionDefaults, discoveryConnectionSource } from "../cli/database-setup.js";
-import type { DatabaseSetupCandidateView } from "../db/file-discovery.js";
+import { deriveMySqlDatabaseName } from "../cli/database-setup.js";
 import { ProtocolParseError } from "./protocol.js";
 
 export const CONNECTOR_SETUP_CONFIG_COMMAND_TYPE = "connector.setup.config";
@@ -73,19 +72,14 @@ export function parseConnectorSetupConfigCommand(
     return command;
   }
 
-  const path = expectNonEmptyString(message.path, "path").trim();
-  command.path = path;
+  command.path = expectNonEmptyString(message.path, "path").trim();
+  command.host = expectNonEmptyString(message.host, "host").trim();
+  command.port = expectPort(message.port, "port");
+  command.username = expectNonEmptyString(message.username, "username").trim();
+  command.password = expectPassword(message.password, "password");
   const selectedFileCandidateId = optionalNonEmptyString(message.selectedFileCandidateId);
   if (selectedFileCandidateId) {
     command.selectedFileCandidateId = selectedFileCandidateId;
-  }
-
-  const username = optionalNonEmptyString(message.username);
-  if (username) {
-    command.username = username;
-  }
-  if (message.password !== undefined && message.password !== null) {
-    command.password = expectPassword(message.password, "password");
   }
 
   return command;
@@ -106,8 +100,10 @@ export function setupConfigToDatabaseConfig(command: ConnectorSetupConfigCommand
   return fileDiscoveryPathToDatabaseConfig({
     driver: command.driver,
     path: command.path!,
-    username: command.username,
-    password: command.password
+    host: command.host!,
+    port: command.port!,
+    username: command.username!,
+    password: command.password!
   });
 }
 
@@ -157,26 +153,21 @@ export function extractSetupConfigSecrets(message: Record<string, unknown>): str
 export function fileDiscoveryPathToDatabaseConfig(input: {
   driver: DatabaseDriver;
   path: string;
-  username?: string;
-  password?: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
 }): DatabaseConfig {
-  const candidate: DatabaseSetupCandidateView = {
-    index: 0,
-    path: input.path,
-    type: input.driver,
-    confidence: "high",
-    supported: true
-  };
-  const source = discoveryConnectionSource(candidate);
-  const defaults = connectionDefaults(source);
+  const name =
+    input.driver === "mysql" ? deriveMySqlDatabaseName(input.path) : input.path;
 
   return {
     driver: input.driver,
-    host: defaults.host,
-    port: defaults.port,
-    name: defaults.databaseName.length > 0 ? defaults.databaseName : input.path,
-    user: input.username?.trim() || defaults.user,
-    password: input.password ?? defaults.password
+    host: input.host,
+    port: input.port,
+    name,
+    user: input.username,
+    password: input.password
   };
 }
 
