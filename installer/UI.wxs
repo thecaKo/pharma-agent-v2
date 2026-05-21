@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <Property Id="CONNECTOR_TOKEN" Secure="yes" Hidden="yes" />
     <Property Id="CONNECTOR_WS_URL" Admin="yes" />
@@ -8,7 +7,21 @@
               Value="Database connection, table selection, and field mapping still use the existing database setup flow. Run database onboarding with: npm run database-setup" />
 
     <UI Id="ConnectorInstallerUI">
-      <ui:WixUI Id="WixUI_Minimal" />
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <DialogRef Id="WelcomeDlg" />
 
       <Dialog Id="ConnectorSettingsDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="30" Text="{\WixUI_Font_Bigger}Central Connection Settings" />
@@ -23,15 +36,25 @@
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel" />
       </Dialog>
 
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg" Condition="NOT Installed" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Cancel" Event="SpawnDialog" Value="CancelDlg" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ConnectorSettingsDlg" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Condition="Installed" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
 
       <InstallUISequence>
-        <Show Dialog="override WelcomeEulaDlg" Before="ProgressDlg" Condition="0" />
+        <Show Dialog="WelcomeDlg" Before="ProgressDlg" Condition="NOT Installed" />
       </InstallUISequence>
+
+      <Property Id="ARPNOMODIFY" Value="1" />
     </UI>
+
+    <UIRef Id="WixUI_Common" />
   </Fragment>
 </Wix>

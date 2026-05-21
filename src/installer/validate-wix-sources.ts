@@ -92,6 +92,22 @@ export function validateWixWizardScope(combinedSource: string): string[] {
     errors.push("missing masked connector token control");
   }
 
+  if (combinedSource.includes('WixUI Id="WixUI_Minimal"')) {
+    errors.push("forbidden WixUI_Minimal wizard for configurable installer");
+  }
+
+  if (!combinedSource.includes('Dialog Id="ConnectorSettingsDlg"')) {
+    errors.push("missing connector settings dialog");
+  }
+
+  if (!combinedSource.includes('Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg"')) {
+    errors.push("missing welcome-to-connector-settings wizard navigation");
+  }
+
+  if (!combinedSource.includes('Dialog="ConnectorSettingsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg"')) {
+    errors.push("missing connector-settings-to-verify-ready wizard navigation");
+  }
+
   if (combinedSource.includes(INSTALLER_COMPLETION_DATABASE_ONBOARDING_HINT) === false) {
     errors.push("missing database onboarding completion guidance");
   }
@@ -117,6 +133,22 @@ export function validateWixProgramDataConfigAuthoring(combinedSource: string): s
 
   if (!combinedSource.includes("WriteProgramDataConfig")) {
     errors.push("missing ProgramData config custom action");
+  }
+
+  if (!combinedSource.includes('Property="WriteProgramDataConfig"')) {
+    errors.push("missing ProgramData config custom action data property");
+  }
+
+  if (!combinedSource.includes('Execute="deferred"')) {
+    errors.push("missing deferred ProgramData config custom action execution");
+  }
+
+  if (!combinedSource.includes("[#WriteProgramDataConfigScript]")) {
+    errors.push("missing installed ProgramData config script file reference");
+  }
+
+  if (!combinedSource.includes('HideTarget="yes"')) {
+    errors.push("missing hidden ProgramData config custom action target");
   }
 
   return errors;
