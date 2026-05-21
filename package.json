@@ -13,7 +13,7 @@
     "mock-panel": "node dist/cli/mock-panel.js",
     "package:windows-installer": "npm run build && node dist/installer/package-windows-installer.js",
     "start": "node dist/main.js",
-    "start:dev": "tsx src/main.ts",
+    "start:dev": "NODE_ENV=dev tsx src/main.ts",
     "test": "vitest run",
     "coverage": "vitest run --coverage"
   },
@@ -32,6 +32,7 @@
     "dotenv": "^16.6.1",
     "mysql2": "^3.22.3",
     "node-firebird": "^2.3.2",
+    "pino": "^9.14.0",
     "ws": "^8.20.1"
   }
 }
