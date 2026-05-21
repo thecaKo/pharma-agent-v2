@@ -18,7 +18,6 @@
                         Arguments="&quot;[INSTALLFOLDER]$(var.ServiceEntrypoint)&quot;" />
         <ServiceControl Id="ConnectorServiceControl"
                         Name="$(var.ServiceName)"
-                        Start="install"
                         Stop="both"
                         Remove="uninstall"
                         Wait="yes" />

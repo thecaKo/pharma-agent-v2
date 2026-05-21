@@ -23,6 +23,7 @@
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel" />
       </Dialog>
 
+      <Publish Dialog="WelcomeEulaDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />

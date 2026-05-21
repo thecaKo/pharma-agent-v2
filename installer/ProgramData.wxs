@@ -20,16 +20,10 @@
       </Component>
     </DirectoryRef>
 
-    <SetProperty Id="WriteProgramDataConfigData"
-                 Value="TOKEN=[CONNECTOR_TOKEN];WSURL=[CONNECTOR_WS_URL]"
-                 After="CostFinalize"
-                 Sequence="execute"
-                 Condition="NOT Installed" />
-
     <CustomAction Id="WriteProgramDataConfig"
                   Directory="INSTALLFOLDER"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]WriteProgramDataConfig.ps1&quot; -CustomActionData &quot;[WriteProgramDataConfigData]&quot;"
-                  Execute="deferred"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]WriteProgramDataConfig.ps1&quot; -CustomActionData &quot;TOKEN=[CONNECTOR_TOKEN];WSURL=[CONNECTOR_WS_URL]&quot;"
+                  Execute="immediate"
                   Impersonate="no"
                   Return="check" />
 
