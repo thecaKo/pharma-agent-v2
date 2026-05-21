@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputName>PharmaAgentConnector-Setup</OutputName>
     <OutputType>Bundle</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 

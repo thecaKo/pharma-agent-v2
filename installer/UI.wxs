@@ -4,6 +4,8 @@
   <Fragment>
     <Property Id="CONNECTOR_TOKEN" Secure="yes" Hidden="yes" />
     <Property Id="CONNECTOR_WS_URL" Admin="yes" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="Database connection, table selection, and field mapping still use the existing database setup flow. Run database onboarding with: npm run database-setup" />
 
     <UI Id="ConnectorInstallerUI">
       <ui:WixUI Id="WixUI_Minimal" />
@@ -21,30 +23,11 @@
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel" />
       </Dialog>
 
-      <Dialog Id="ConnectorExitDialog" Width="370" Height="270" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="30" Text="{\WixUI_Font_Bigger}Installation Complete" />
-        <Control Id="SuccessText" Type="Text" X="20" Y="45" Width="330" Height="40"
-                 Text="Pharma Agent Connector was installed and registered as a Windows Service." />
-        <Control Id="DatabaseOnboardingText" Type="Text" X="20" Y="95" Width="330" Height="60"
-                 Text="Database connection, table selection, and field mapping still use the existing database setup flow. Run database onboarding with: npm run database-setup" />
-        <Control Id="Finish" Type="PushButton" X="304" Y="243" Width="56" Height="17" Default="yes" Text="Finish" />
-      </Dialog>
-
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
       <Publish Dialog="ConnectorSettingsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="ConnectorSettingsDlg" Control="Cancel" Event="SpawnDialog" Value="CancelDlg" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
-      <Publish Dialog="ConnectorExitDialog" Control="Finish" Event="EndDialog" Value="Return" />
-
-      <InstallUISequence>
-        <Show Dialog="override ExitDialog" OnExit="success" Condition="0" />
-        <Show Dialog="ConnectorExitDialog" OnExit="success" />
-      </InstallUISequence>
-
-      <AdminUISequence>
-        <Show Dialog="override ExitDialog" OnExit="success" Condition="0" />
-        <Show Dialog="ConnectorExitDialog" OnExit="success" />
-      </AdminUISequence>
     </UI>
   </Fragment>
 </Wix>

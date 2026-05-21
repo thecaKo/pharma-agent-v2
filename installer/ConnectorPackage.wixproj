@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputName>PharmaAgentConnector</OutputName>
     <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <StagingDir Condition="'$(StagingDir)' == ''">$(MSBuildThisFileDirectory)staging</StagingDir>
     <DefineConstants>StagingDir=$(StagingDir)</DefineConstants>
