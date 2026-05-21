@@ -10,7 +10,8 @@ describe("createLogger", () => {
     const logger = createLogger({
       level: "debug",
       secrets: ["test-connector-token", "test-db-password"],
-      output
+      output,
+      nodeEnv: "dev"
     });
 
     logger.info("configuration.loaded", {
@@ -42,9 +43,23 @@ describe("createLogger", () => {
       log: vi.fn(),
       error: vi.fn()
     };
-    const logger = createLogger({ level: "warn", output });
+    const logger = createLogger({ level: "warn", output, nodeEnv: "dev" });
 
     logger.info("configuration.loaded");
+
+    expect(output.log).not.toHaveBeenCalled();
+    expect(output.error).not.toHaveBeenCalled();
+  });
+
+  it("does not write outside NODE_ENV dev", () => {
+    const output = {
+      log: vi.fn(),
+      error: vi.fn()
+    };
+    const logger = createLogger({ level: "debug", output, nodeEnv: "production" });
+
+    logger.info("configuration.loaded");
+    logger.error("runtime.error");
 
     expect(output.log).not.toHaveBeenCalled();
     expect(output.error).not.toHaveBeenCalled();

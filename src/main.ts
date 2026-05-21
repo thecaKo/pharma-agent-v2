@@ -19,7 +19,8 @@ export async function validateStartup(
   const config = loadConfig(startupEnv.env);
   const logger = createLogger({
     level: config.logLevel,
-    secrets: configSecrets(config)
+    secrets: configSecrets(config),
+    nodeEnv: readNodeEnv(env)
   });
 
   logger.info("service.startup", {
@@ -45,7 +46,7 @@ export async function runMain(
     await validateStartup(env, options);
     return 0;
   } catch (error) {
-    const logger = createLogger({ level: "info" });
+    const logger = createLogger({ level: "info", nodeEnv: readNodeEnv(env) });
 
     if (error instanceof ConfigValidationError) {
       logger.error("unrecoverable.configuration_error", {
@@ -81,7 +82,7 @@ export async function runServiceMain(
     registerShutdownHandlers(runtime);
     return 0;
   } catch (error) {
-    const logger = createLogger({ level: "info" });
+    const logger = createLogger({ level: "info", nodeEnv: readNodeEnv(env) });
 
     if (error instanceof ConfigValidationError) {
       logger.error("unrecoverable.configuration_error", {
@@ -105,6 +106,10 @@ export async function runServiceMain(
     });
     return 1;
   }
+}
+
+function readNodeEnv(env: NodeJS.ProcessEnv): string | undefined {
+  return env.NODE_ENV ?? env.node_env;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

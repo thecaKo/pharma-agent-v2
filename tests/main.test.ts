@@ -33,7 +33,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      await validateStartup(validEnv() as NodeJS.ProcessEnv);
+      await validateStartup(validDevEnv() as NodeJS.ProcessEnv);
 
       expect(error).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledTimes(2);
@@ -53,7 +53,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runMain(validEnv() as NodeJS.ProcessEnv)).toBe(0);
+      expect(await runMain(validDevEnv() as NodeJS.ProcessEnv)).toBe(0);
       expect(error).not.toHaveBeenCalled();
     } finally {
       log.mockRestore();
@@ -66,7 +66,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runMain(validEnv({ DB_PASSWORD: "" }) as NodeJS.ProcessEnv)).toBe(1);
+      expect(await runMain(validDevEnv({ DB_PASSWORD: "" }) as NodeJS.ProcessEnv)).toBe(1);
       expect(log).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledOnce();
       const output = error.mock.calls[0]?.[0] as string;
@@ -85,7 +85,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runMain(validDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath })).toBe(1);
+      expect(await runMain(validDevDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath })).toBe(1);
       expect(error).toHaveBeenCalledOnce();
       const output = error.mock.calls[0]?.[0] as string;
       expect(output).toContain('"errorCode":"PROGRAMDATA_CONFIG_FAILED"');
@@ -101,7 +101,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runServiceMain(validEnv({ DB_PASSWORD: "" }) as NodeJS.ProcessEnv)).toBe(1);
+      expect(await runServiceMain(validDevEnv({ DB_PASSWORD: "" }) as NodeJS.ProcessEnv)).toBe(1);
       expect(error).toHaveBeenCalledOnce();
       const output = error.mock.calls[0]?.[0] as string;
       expect(output).toContain('"event":"unrecoverable.configuration_error"');
@@ -116,7 +116,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runServiceMain(validDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath })).toBe(1);
+      expect(await runServiceMain(validDevDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath })).toBe(1);
     } finally {
       error.mockRestore();
     }
@@ -125,7 +125,7 @@ describe("startup entrypoint", () => {
   it("starts service runtime with merged startup environment", async () => {
     const { startConnectorRuntime } = await import("../src/service/runtime.js");
 
-    expect(await runServiceMain(validEnv() as NodeJS.ProcessEnv)).toBe(0);
+    expect(await runServiceMain(validDevEnv() as NodeJS.ProcessEnv)).toBe(0);
     expect(startConnectorRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         env: expect.objectContaining({
@@ -145,7 +145,7 @@ describe("startup entrypoint", () => {
     try {
       expect(
         await runMain(
-          validDatabaseEnv({
+          validDevDatabaseEnv({
             DB_PASSWORD: "env-secret-db-password",
             DB_USER: ""
           }) as NodeJS.ProcessEnv,
@@ -171,7 +171,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      await validateStartup(validDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath });
+      await validateStartup(validDevDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath });
 
       const output = log.mock.calls.map((call) => call[0]).join("\n");
       expect(output).toContain('"authCredentialSource":"programdata"');
@@ -196,6 +196,14 @@ async function writeInvalidInstallerConfig(): Promise<string> {
     "utf8"
   );
   return configFilePath;
+}
+
+function validDevEnv(overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  return validEnv({ NODE_ENV: "dev", ...overrides });
+}
+
+function validDevDatabaseEnv(overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  return validDatabaseEnv({ NODE_ENV: "dev", ...overrides });
 }
 
 async function writeInstallerConfig(values: Record<string, string>): Promise<string> {
