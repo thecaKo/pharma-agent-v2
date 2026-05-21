@@ -7,8 +7,8 @@ export interface ProductFieldMappings {
   sourceProductCode?: string;
   name?: string;
   barcode?: string;
-  price?: string;
-  stock?: string;
+  price?: string | null;
+  stock?: string | null;
   active?: string;
   sourceUpdatedAt?: string;
 }
@@ -32,16 +32,16 @@ export interface ValidatedMappingConfig {
   incrementalQuery: string;
   cursorField: string;
   cursorType: CursorType;
-  fields: Required<Pick<ProductFieldMappings, "sourceProductCode" | "name" | "price" | "stock">> &
-    Pick<ProductFieldMappings, "barcode" | "active" | "sourceUpdatedAt">;
+  fields: Required<Pick<ProductFieldMappings, "sourceProductCode" | "name">> &
+    Pick<ProductFieldMappings, "price" | "stock" | "barcode" | "active" | "sourceUpdatedAt">;
 }
 
 export interface ProductChangeRecord {
   sourceProductCode: string;
   name: string;
   barcode?: string | null;
-  price: number;
-  stock: number;
+  price: number | null;
+  stock: number | null;
   active?: boolean;
   sourceUpdatedAt?: string;
 }

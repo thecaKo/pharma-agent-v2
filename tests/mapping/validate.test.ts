@@ -62,12 +62,23 @@ describe("validateMappingConfig", () => {
     expectIssue(validMapping({ fields: { ...validMapping().fields, sourceProductCode: "" } }), "fields.sourceProductCode");
   });
 
-  it("rejects mappings without name, price, or stock", () => {
+  it("rejects mappings without name", () => {
     const fields = validMapping().fields;
 
     expectIssue(validMapping({ fields: { ...fields, name: "" } }), "fields.name");
-    expectIssue(validMapping({ fields: { ...fields, price: "" } }), "fields.price");
-    expectIssue(validMapping({ fields: { ...fields, stock: "" } }), "fields.stock");
+  });
+
+  it("accepts mappings without price or stock", () => {
+    const fields = validMapping().fields;
+
+    expect(validateMappingConfig(validMapping({ fields: { ...fields, price: undefined, stock: undefined } }))).toMatchObject({
+      fields: {
+        sourceProductCode: "product_id",
+        name: "description",
+        price: undefined,
+        stock: undefined
+      }
+    });
   });
 
   it("rejects unsupported cursor types", () => {

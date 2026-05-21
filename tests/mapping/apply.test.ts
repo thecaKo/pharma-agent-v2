@@ -131,4 +131,34 @@ describe("applyMapping", () => {
     });
     expect(result.cursorAfter).toBe("2026-05-16T23:00:02.000Z");
   });
+
+  it("maps price and stock as null when they are not configured", () => {
+    const mapping = validateMappingConfig(
+      validMapping({
+        fields: {
+          ...validMapping().fields,
+          price: undefined,
+          stock: undefined
+        }
+      })
+    );
+
+    const result = applyMapping(
+      [
+        {
+          product_id: "P-005",
+          description: "No price or stock",
+          updated_at: "2026-05-16T23:00:03.000Z"
+        }
+      ],
+      mapping
+    );
+
+    expect(result.records[0]).toMatchObject({
+      sourceProductCode: "P-005",
+      name: "No price or stock",
+      price: null,
+      stock: null
+    });
+  });
 });

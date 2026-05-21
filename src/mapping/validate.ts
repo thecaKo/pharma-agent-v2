@@ -1,7 +1,7 @@
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { MappingConfig, ValidatedMappingConfig } from "./types.js";
 
-const REQUIRED_FIELDS = ["sourceProductCode", "name", "price", "stock"] as const;
+const REQUIRED_FIELDS = ["sourceProductCode", "name"] as const;
 const CURSOR_TYPES = new Set(["timestamp", "number"]);
 
 export class MappingValidationError extends Error {
@@ -48,8 +48,8 @@ export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingC
     fields: {
       sourceProductCode: mapping.fields?.sourceProductCode?.trim() as string,
       name: mapping.fields?.name?.trim() as string,
-      price: mapping.fields?.price?.trim() as string,
-      stock: mapping.fields?.stock?.trim() as string,
+      price: normalizeOptionalMapping(mapping.fields?.price),
+      stock: normalizeOptionalMapping(mapping.fields?.stock),
       barcode: normalizeOptionalMapping(mapping.fields?.barcode),
       active: normalizeOptionalMapping(mapping.fields?.active),
       sourceUpdatedAt: normalizeOptionalMapping(mapping.fields?.sourceUpdatedAt)
@@ -69,7 +69,7 @@ function requirePositiveInteger(value: number | undefined, field: string, issues
   }
 }
 
-function normalizeOptionalMapping(value: string | undefined): string | undefined {
+function normalizeOptionalMapping(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
 }

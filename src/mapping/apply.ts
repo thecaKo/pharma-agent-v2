@@ -44,8 +44,8 @@ export function applyMapping(
       sourceProductCode,
       name: normalizeString(row[mapping.fields.name]) ?? "",
       barcode: optionalString(mapping.fields.barcode ? row[mapping.fields.barcode] : undefined),
-      price: toNumber(row[mapping.fields.price]),
-      stock: toNumber(row[mapping.fields.stock]),
+      price: mapping.fields.price ? toNumber(row[mapping.fields.price]) : null,
+      stock: mapping.fields.stock ? toNumber(row[mapping.fields.stock]) : null,
       ...optionalBooleanProperty("active", mapping.fields.active ? row[mapping.fields.active] : undefined),
       ...optionalStringProperty(
         "sourceUpdatedAt",

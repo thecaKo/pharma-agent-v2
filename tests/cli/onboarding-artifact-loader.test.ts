@@ -122,7 +122,6 @@ describe("loadValidatedMappingFromOnboardingArtifactFile", () => {
         batchSize: 100,
         fields: {
           sourceProductCode: "product_id",
-          name: "description",
           price: "sale_price"
         }
       }),
@@ -134,7 +133,7 @@ describe("loadValidatedMappingFromOnboardingArtifactFile", () => {
       await loadValidatedMappingFromOnboardingArtifactFile(path);
     } catch (error) {
       expect(error).toBeInstanceOf(MappingValidationError);
-      expect((error as MappingValidationError).issues.some((i) => i.field === "fields.stock")).toBe(true);
+      expect((error as MappingValidationError).issues.some((i) => i.field === "fields.name")).toBe(true);
     }
   });
 
