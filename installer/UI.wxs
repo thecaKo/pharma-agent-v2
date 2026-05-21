@@ -35,7 +35,16 @@
       <Publish Dialog="ConnectorSettingsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ConnectorSettingsDlg" Order="2" />
       <Publish Dialog="ConnectorExitDialog" Control="Finish" Event="EndDialog" Value="Return" />
-      <Publish Dialog="InstallFiles" Control="Install" Event="NewDialog" Value="ConnectorExitDialog" Order="2" />
+
+      <InstallUISequence>
+        <Show Dialog="ExitDialog" OnExit="success" Condition="0" />
+        <Show Dialog="ConnectorExitDialog" OnExit="success" />
+      </InstallUISequence>
+
+      <AdminUISequence>
+        <Show Dialog="ExitDialog" OnExit="success" Condition="0" />
+        <Show Dialog="ConnectorExitDialog" OnExit="success" />
+      </AdminUISequence>
     </UI>
   </Fragment>
 </Wix>
