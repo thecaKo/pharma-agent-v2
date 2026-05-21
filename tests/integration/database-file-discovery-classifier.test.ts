@@ -33,7 +33,6 @@ describe("database discovery classifier integration surface", () => {
 
     expect(candidates).toEqual([
       { path: "/scan/firebird/PHARMACY.FDB", type: "firebird", confidence: "high" },
-      { path: "/scan/sql/pharmacy.mdf", type: "sqlserver", confidence: "high" },
       { path: "/scan/mysql/products.frm", type: "mysql", confidence: "low" }
     ]);
 
@@ -55,14 +54,6 @@ describe("database discovery classifier integration surface", () => {
         supported: true,
         internal: false,
         warning: undefined
-      },
-      {
-        index: 3,
-        path: "/scan/sql/pharmacy.mdf",
-        type: "sqlserver",
-        confidence: "high",
-        supported: false,
-        warning: "SQL Server discovery is visible, but onboarding support is not implemented."
       }
     ]);
   });
@@ -89,10 +80,8 @@ describe("database file discovery scanner integration", () => {
     const result = await discoverDatabaseFiles({ roots: [root] });
 
     expect(result.candidates).toEqual([
-      { path: firebirdPath, type: "firebird", confidence: "high" },
-      { path: path.join(root, "vendor", "mysql", "data"), type: "mysql", confidence: "medium" },
-      { path: mysqlPath, type: "mysql", confidence: "low" },
-      { path: sqlServerPath, type: "sqlserver", confidence: "low" }
+      { path: firebirdPath, type: "firebird", confidence: "high", sizeBytes: 13 },
+      { path: mysqlPath, type: "mysql", confidence: "low", sizeBytes: 13 },
     ]);
     expect(result.scannedPaths).toBe(10);
     expect(result.blockedPaths).toBe(0);

@@ -2,7 +2,7 @@ import { opendir, lstat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 
-export type DatabaseCandidateType = "firebird" | "mysql" | "sqlserver";
+export type DatabaseCandidateType = "firebird" | "mysql";
 export type DatabaseDiscoveryConfidence = "high" | "medium" | "low";
 export type DatabasePathKind = "file" | "directory";
 
@@ -10,6 +10,7 @@ export interface DatabaseFileCandidate {
   path: string;
   type: DatabaseCandidateType;
   confidence: DatabaseDiscoveryConfidence;
+  sizeBytes?: number | null;
 }
 
 export interface DatabaseSetupCandidateView extends DatabaseFileCandidate {
@@ -27,7 +28,28 @@ export interface DatabaseFileDiscoveryResult {
 
 export interface DatabaseFileDiscoveryOptions {
   roots?: readonly string[];
+  maxCandidates?: number;
 }
+
+export const DATABASE_FILE_DISCOVERY_MAX_CANDIDATES = 1000;
+
+const SKIP_DIRECTORY_NAMES = new Set(
+  [
+    "node_modules",
+    ".git",
+    ".svn",
+    ".hg",
+    "__pycache__",
+    ".cache",
+    "proc",
+    "sys",
+    "dev",
+    "run",
+    "tmp",
+    "$recycle.bin",
+    "system volume information"
+  ].map((name) => name.toLowerCase())
+);
 
 export interface DatabasePathMetadata {
   path: string;
@@ -38,6 +60,7 @@ interface DiscoveryAccumulator {
   candidates: DatabaseFileCandidate[];
   scannedPaths: number;
   blockedPaths: number;
+  maxCandidates: number;
 }
 
 const confidenceRank: Record<DatabaseDiscoveryConfidence, number> = {
@@ -48,8 +71,7 @@ const confidenceRank: Record<DatabaseDiscoveryConfidence, number> = {
 
 const typeRank: Record<DatabaseCandidateType, number> = {
   firebird: 0,
-  mysql: 1,
-  sqlserver: 2
+  mysql: 1
 };
 
 const setupSupportRank = {
@@ -68,12 +90,6 @@ const firebirdFileConfidence = new Map<string, DatabaseDiscoveryConfidence>([
   [".fbk", "low"]
 ]);
 
-const sqlServerFileConfidence = new Map<string, DatabaseDiscoveryConfidence>([
-  [".mdf", "high"],
-  [".ndf", "medium"],
-  [".ldf", "low"]
-]);
-
 const mysqlFileConfidence = new Map<string, DatabaseDiscoveryConfidence>([
   [".ibd", "high"],
   [".myd", "medium"],
@@ -81,25 +97,32 @@ const mysqlFileConfidence = new Map<string, DatabaseDiscoveryConfidence>([
   [".frm", "low"]
 ]);
 
-const mysqlDataDirectoryNames = new Set(["mysql-data", "mysql_data", "mysqldata", "mariadb-data", "mariadb_data"]);
 const firebirdInternalFileNames = new Set(["security2.fdb", "security3.fdb", "security4.fdb"]);
 const mysqlInternalFileNames = new Set(["ib_buffer_pool", "mysql.ibd"]);
 
-const sqlServerUnsupportedWarning = "SQL Server discovery is visible, but onboarding support is not implemented.";
 const firebirdInternalWarning = "Firebird security database detected; choose the pharmacy database instead.";
 const mysqlInternalWarning = "MySQL internal/shared file detected; choose an application schema file instead.";
+
+export function shouldSkipDiscoveryDirectory(directoryName: string): boolean {
+  return SKIP_DIRECTORY_NAMES.has(directoryName.toLowerCase());
+}
 
 export async function discoverDatabaseFiles(
   options: DatabaseFileDiscoveryOptions = {}
 ): Promise<DatabaseFileDiscoveryResult> {
   const roots = resolveDatabaseDiscoveryRoots(options.roots);
+  const maxCandidates = options.maxCandidates ?? DATABASE_FILE_DISCOVERY_MAX_CANDIDATES;
   const accumulator: DiscoveryAccumulator = {
     candidates: [],
     scannedPaths: 0,
-    blockedPaths: 0
+    blockedPaths: 0,
+    maxCandidates
   };
 
   for (const root of roots) {
+    if (accumulator.candidates.length >= accumulator.maxCandidates) {
+      break;
+    }
     await scanPath(root, accumulator);
   }
 
@@ -120,7 +143,7 @@ export function resolveDatabaseDiscoveryRoots(roots?: readonly string[]): string
 
 export function classifyDatabasePath(entry: DatabasePathMetadata): DatabaseFileCandidate | undefined {
   if (entry.kind === "directory") {
-    return classifyDirectory(entry.path);
+    return undefined;
   }
 
   return classifyFile(entry.path);
@@ -215,16 +238,7 @@ function classifyFile(filePath: string): DatabaseFileCandidate | undefined {
     };
   }
 
-  const sqlServerConfidence = sqlServerFileConfidence.get(extension);
-  if (sqlServerConfidence !== undefined) {
-    return {
-      path: filePath,
-      type: "sqlserver",
-      confidence: sqlServerConfidence
-    };
-  }
-
-  const mysqlConfidence = mysqlFileConfidence.get(extension) ?? classifyMySqlSharedDataFile(filePath);
+  const mysqlConfidence = mysqlFileConfidence.get(extension);
   if (mysqlConfidence !== undefined) {
     return {
       path: filePath,
@@ -238,14 +252,6 @@ function classifyFile(filePath: string): DatabaseFileCandidate | undefined {
 
 function createDatabaseSetupCandidateView(candidate: DatabaseFileCandidate): DatabaseSetupCandidateView {
   const internalWarning = detectInternalCandidateWarning(candidate);
-  if (candidate.type === "sqlserver") {
-    return {
-      ...candidate,
-      index: 0,
-      supported: false,
-      warning: sqlServerUnsupportedWarning
-    };
-  }
 
   return {
     ...candidate,
@@ -273,11 +279,17 @@ async function scanPath(entryPath: string, accumulator: DiscoveryAccumulator): P
   }
 
   const candidate = classifyDatabasePath({ path: entryPath, kind });
-  if (candidate !== undefined) {
-    accumulator.candidates.push(candidate);
+  if (candidate !== undefined && accumulator.candidates.length < accumulator.maxCandidates) {
+    accumulator.candidates.push({
+      ...candidate,
+      sizeBytes: boundedFileSize(stats)
+    });
   }
 
   if (kind === "directory") {
+    if (shouldSkipDiscoveryDirectory(path.basename(entryPath))) {
+      return;
+    }
     await scanDirectory(entryPath, accumulator);
   }
 }
@@ -293,6 +305,12 @@ async function scanDirectory(directoryPath: string, accumulator: DiscoveryAccumu
 
   try {
     for await (const entry of directory) {
+      if (accumulator.candidates.length >= accumulator.maxCandidates) {
+        break;
+      }
+      if (shouldSkipDiscoveryDirectory(entry.name)) {
+        continue;
+      }
       await scanPath(path.join(directoryPath, entry.name), accumulator);
     }
   } catch {
@@ -300,50 +318,21 @@ async function scanDirectory(directoryPath: string, accumulator: DiscoveryAccumu
   }
 }
 
-function classifyDirectory(directoryPath: string): DatabaseFileCandidate | undefined {
-  const segments = normalizedPathSegments(directoryPath);
-  const directoryName = segments.at(-1);
-
-  if (directoryName === undefined) {
-    return undefined;
+function boundedFileSize(stats: Stats): number | null {
+  const sizeNum = stats.size;
+  if (typeof sizeNum !== "number" || !Number.isFinite(sizeNum) || sizeNum < 0) {
+    return null;
   }
 
-  if (mysqlDataDirectoryNames.has(directoryName)) {
-    return {
-      path: directoryPath,
-      type: "mysql",
-      confidence: "medium"
-    };
-  }
-
-  const hasMySqlAncestor = segments.slice(0, -1).some((segment) => segment.includes("mysql") || segment.includes("mariadb"));
-  if (directoryName === "data" && hasMySqlAncestor) {
-    return {
-      path: directoryPath,
-      type: "mysql",
-      confidence: "medium"
-    };
-  }
-
-  return undefined;
+  return sizeNum > Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : Math.trunc(sizeNum);
 }
 
 function defaultSystemScanRoots(): string[] {
+  if (process.platform === "win32") {
+    return uniqueSortedPaths("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((drive) => `${drive}:\\`));
+  }
+
   return uniqueSortedPaths([path.parse(process.cwd()).root]);
-}
-
-function classifyMySqlSharedDataFile(filePath: string): DatabaseDiscoveryConfidence | undefined {
-  const fileName = path.basename(filePath).toLowerCase();
-
-  if (/^ibdata\d+$/.test(fileName)) {
-    return "medium";
-  }
-
-  if (/^ib_logfile\d+$/.test(fileName)) {
-    return "low";
-  }
-
-  return undefined;
 }
 
 function detectInternalCandidateWarning(candidate: DatabaseFileCandidate): string | undefined {
@@ -358,9 +347,6 @@ function detectInternalCandidateWarning(candidate: DatabaseFileCandidate): strin
       return mysqlInternalWarning;
     }
 
-    if (/^ibdata\d+$/.test(fileName) || /^ib_logfile\d+$/.test(fileName)) {
-      return mysqlInternalWarning;
-    }
   }
 
   return undefined;
@@ -368,13 +354,6 @@ function detectInternalCandidateWarning(candidate: DatabaseFileCandidate): strin
 
 function uniqueSortedPaths(paths: readonly string[]): string[] {
   return [...new Set(paths)].sort(comparePaths);
-}
-
-function normalizedPathSegments(value: string): string[] {
-  return value
-    .split(/[\\/]+/)
-    .map((segment) => segment.trim().toLowerCase())
-    .filter((segment) => segment.length > 0);
 }
 
 function comparePaths(left: string, right: string): number {

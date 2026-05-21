@@ -40,23 +40,6 @@ describe("database file discovery classifier", () => {
     });
   });
 
-  it("classifies SQL Server file candidates from metadata", () => {
-    expect(classifyDatabasePath({ path: "/sql/pharmacy.mdf", kind: "file" })).toEqual({
-      path: "/sql/pharmacy.mdf",
-      type: "sqlserver",
-      confidence: "high"
-    });
-
-    expect(classifyDatabasePath({ path: "/sql/pharmacy.ndf", kind: "file" })).toMatchObject({
-      type: "sqlserver",
-      confidence: "medium"
-    });
-    expect(classifyDatabasePath({ path: "/sql/pharmacy.ldf", kind: "file" })).toMatchObject({
-      type: "sqlserver",
-      confidence: "low"
-    });
-  });
-
   it("classifies MySQL file candidates from metadata", () => {
     expect(classifyDatabasePath({ path: "/mysql/pharmacy/products.ibd", kind: "file" })).toEqual({
       path: "/mysql/pharmacy/products.ibd",
@@ -68,34 +51,18 @@ describe("database file discovery classifier", () => {
       type: "mysql",
       confidence: "medium"
     });
-    expect(classifyDatabasePath({ path: "/mysql/data/ibdata1", kind: "file" })).toMatchObject({
-      type: "mysql",
-      confidence: "medium"
-    });
     expect(classifyDatabasePath({ path: "/mysql/pharmacy/products.frm", kind: "file" })).toMatchObject({
       type: "mysql",
       confidence: "low"
     });
   });
 
-  it("classifies plausible MySQL data directories from metadata", () => {
-    expect(classifyDatabasePath({ path: "/var/lib/mysql/data", kind: "directory" })).toEqual({
-      path: "/var/lib/mysql/data",
-      type: "mysql",
-      confidence: "medium"
-    });
-
-    expect(classifyDatabasePath({ path: "C:\\ProgramData\\Vendor\\mysql-data", kind: "directory" })).toEqual({
-      path: "C:\\ProgramData\\Vendor\\mysql-data",
-      type: "mysql",
-      confidence: "medium"
-    });
-  });
-
-  it("ignores unrelated file and directory names", () => {
+  it("ignores unrelated files, directories, and unsupported database extensions", () => {
     expect(classifyDatabasePath({ path: "/documents/pharmacy.txt", kind: "file" })).toBeUndefined();
     expect(classifyDatabasePath({ path: "/documents/data", kind: "directory" })).toBeUndefined();
     expect(classifyDatabasePath({ path: "/backups/pharmacy.sqlite", kind: "file" })).toBeUndefined();
+    expect(classifyDatabasePath({ path: "/sql/pharmacy.mdf", kind: "file" })).toBeUndefined();
+    expect(classifyDatabasePath({ path: "/mysql/data/ibdata1", kind: "file" })).toBeUndefined();
   });
 });
 
@@ -110,8 +77,13 @@ describe("database file discovery scanner", () => {
     ]);
   });
 
-  it("uses the current filesystem root when no explicit roots are provided", () => {
-    expect(resolveDatabaseDiscoveryRoots()).toEqual([path.parse(process.cwd()).root]);
+  it("uses every Windows drive or the current filesystem root when no explicit roots are provided", () => {
+    const expectedRoots =
+      process.platform === "win32"
+        ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((drive) => `${drive}:\\`)
+        : [path.parse(process.cwd()).root];
+
+    expect(resolveDatabaseDiscoveryRoots()).toEqual(expectedRoots);
   });
 
   it("returns a Firebird candidate from an explicit root", async () => {
@@ -119,14 +91,14 @@ describe("database file discovery scanner", () => {
     const candidatePath = path.join(root, "PHARMACY.FDB");
     await writeFile(candidatePath, "content that must not be read");
 
-    await expect(discoverDatabaseFiles({ roots: [root] })).resolves.toEqual({
-      candidates: [{ path: candidatePath, type: "firebird", confidence: "high" }],
+    await expect(discoverDatabaseFiles({ roots: [root] })).resolves.toMatchObject({
+      candidates: [{ path: candidatePath, type: "firebird", confidence: "high", sizeBytes: 29 }],
       scannedPaths: 2,
       blockedPaths: 0
     });
   });
 
-  it("discovers nested SQL Server and MySQL artifacts", async () => {
+  it("discovers nested MySQL files and ignores unsupported artifacts and directories", async () => {
     const root = await createTemporaryDirectory();
     const sqlDirectory = path.join(root, "sql");
     const mysqlDirectory = path.join(root, "mysql", "data", "pharmacy");
@@ -140,12 +112,24 @@ describe("database file discovery scanner", () => {
     const result = await discoverDatabaseFiles({ roots: [root] });
 
     expect(result.candidates).toEqual([
-      { path: mysqlPath, type: "mysql", confidence: "high" },
-      { path: sqlServerPath, type: "sqlserver", confidence: "high" },
-      { path: path.join(root, "mysql", "data"), type: "mysql", confidence: "medium" }
+      { path: mysqlPath, type: "mysql", confidence: "high", sizeBytes: 0 }
     ]);
     expect(result.scannedPaths).toBe(7);
     expect(result.blockedPaths).toBe(0);
+  });
+
+  it("skips node_modules and ignores non-database files", async () => {
+    const root = await createTemporaryDirectory();
+    const modulesDirectory = path.join(root, "node_modules", ".pnpm");
+    await mkdir(modulesDirectory, { recursive: true });
+    await writeFile(path.join(modulesDirectory, "pnpm-workspace-state-v1.json"), "{}");
+    await writeFile(path.join(root, "PHARMACY.FDB"), "");
+
+    const result = await discoverDatabaseFiles({ roots: [root] });
+
+    expect(result.candidates).toEqual([
+      { path: path.join(root, "PHARMACY.FDB"), type: "firebird", confidence: "high", sizeBytes: 0 }
+    ]);
   });
 
   it("reports scanned path counts for an empty root", async () => {
@@ -179,8 +163,8 @@ describe("database file discovery scanner", () => {
     try {
       await chmod(blockedDirectory, 0o000);
 
-      await expect(discoverDatabaseFiles({ roots: [root] })).resolves.toEqual({
-        candidates: [{ path: candidatePath, type: "firebird", confidence: "high" }],
+      await expect(discoverDatabaseFiles({ roots: [root] })).resolves.toMatchObject({
+        candidates: [{ path: candidatePath, type: "firebird", confidence: "high", sizeBytes: 0 }],
         scannedPaths: 3,
         blockedPaths: 1
       });
@@ -191,19 +175,19 @@ describe("database file discovery scanner", () => {
 
   it("sorts candidates deterministically regardless of root traversal order", async () => {
     const root = await createTemporaryDirectory();
-    const zDirectory = path.join(root, "z-sql");
+    const zDirectory = path.join(root, "z-mysql");
     const aDirectory = path.join(root, "a-firebird");
     await mkdir(zDirectory, { recursive: true });
     await mkdir(aDirectory, { recursive: true });
-    const sqlServerPath = path.join(zDirectory, "pharmacy.mdf");
+    const mysqlPath = path.join(zDirectory, "products.ibd");
     const firebirdPath = path.join(aDirectory, "PHARMACY.FDB");
-    await writeFile(sqlServerPath, "");
+    await writeFile(mysqlPath, "");
     await writeFile(firebirdPath, "");
 
     await expect(discoverDatabaseFiles({ roots: [zDirectory, aDirectory] })).resolves.toMatchObject({
       candidates: [
         { path: firebirdPath, type: "firebird", confidence: "high" },
-        { path: sqlServerPath, type: "sqlserver", confidence: "high" }
+        { path: mysqlPath, type: "mysql", confidence: "high" }
       ]
     });
   });
@@ -213,7 +197,6 @@ describe("database file discovery sorting", () => {
   it("sorts deterministically by confidence, type, and path without mutating input", () => {
     const candidates: DatabaseFileCandidate[] = [
       { path: "/z/mysql/products.frm", type: "mysql", confidence: "low" },
-      { path: "/b/sql/pharmacy.mdf", type: "sqlserver", confidence: "high" },
       { path: "/a/mysql/products.ibd", type: "mysql", confidence: "high" },
       { path: "/b/firebird/PHARMACY.FDB", type: "firebird", confidence: "high" },
       { path: "/a/firebird/ARCHIVE.GDB", type: "firebird", confidence: "medium" }
@@ -222,7 +205,6 @@ describe("database file discovery sorting", () => {
     expect(sortDatabaseFileCandidates(candidates)).toEqual([
       { path: "/b/firebird/PHARMACY.FDB", type: "firebird", confidence: "high" },
       { path: "/a/mysql/products.ibd", type: "mysql", confidence: "high" },
-      { path: "/b/sql/pharmacy.mdf", type: "sqlserver", confidence: "high" },
       { path: "/a/firebird/ARCHIVE.GDB", type: "firebird", confidence: "medium" },
       { path: "/z/mysql/products.frm", type: "mysql", confidence: "low" }
     ]);
@@ -268,21 +250,6 @@ describe("database setup candidate views", () => {
     ]);
   });
 
-  it("keeps SQL Server candidates visible while marking them unsupported", () => {
-    const [view] = buildDatabaseSetupCandidateViews([
-      { path: "/sql/pharmacy.mdf", type: "sqlserver", confidence: "high" }
-    ]);
-
-    expect(view).toEqual({
-      index: 1,
-      path: "/sql/pharmacy.mdf",
-      type: "sqlserver",
-      confidence: "high",
-      supported: false,
-      warning: "SQL Server discovery is visible, but onboarding support is not implemented."
-    });
-  });
-
   it("marks Firebird security databases as internal candidates", () => {
     expect(
       buildDatabaseSetupCandidateViews([
@@ -311,27 +278,17 @@ describe("database setup candidate views", () => {
     ]);
   });
 
-  it("marks MySQL shared data and log files as internal candidates", () => {
+  it("marks MySQL internal files with supported extensions as internal candidates", () => {
     const views = buildDatabaseSetupCandidateViews([
-      { path: "/mysql/data/ib_logfile0", type: "mysql", confidence: "low" },
-      { path: "/mysql/data/ibdata1", type: "mysql", confidence: "medium" }
+      { path: "/mysql/data/mysql.ibd", type: "mysql", confidence: "high" }
     ]);
 
     expect(views).toEqual([
       {
         index: 1,
-        path: "/mysql/data/ibdata1",
+        path: "/mysql/data/mysql.ibd",
         type: "mysql",
-        confidence: "medium",
-        supported: true,
-        internal: true,
-        warning: "MySQL internal/shared file detected; choose an application schema file instead."
-      },
-      {
-        index: 2,
-        path: "/mysql/data/ib_logfile0",
-        type: "mysql",
-        confidence: "low",
+        confidence: "high",
         supported: true,
         internal: true,
         warning: "MySQL internal/shared file detected; choose an application schema file instead."
@@ -349,17 +306,15 @@ describe("database setup candidate views", () => {
     expect(compareDatabaseSetupCandidateViews(views[0], views[1])).toBeLessThan(0);
   });
 
-  it("formats supported, unsupported, and internal setup candidates for interactive selection", () => {
+  it("formats supported and internal setup candidates for interactive selection", () => {
     const views = buildDatabaseSetupCandidateViews([
-      { path: "/sql/pharmacy.mdf", type: "sqlserver", confidence: "high" },
       { path: "/firebird/security3.fdb", type: "firebird", confidence: "high" },
       { path: "/firebird/PHARMACY.FDB", type: "firebird", confidence: "high" }
     ]);
 
     expect(views.map((view) => formatDatabaseSetupCandidateView(view))).toEqual([
       "1. /firebird/PHARMACY.FDB [firebird, high, supported]",
-      "2. /firebird/security3.fdb [firebird, high, internal] - Firebird security database detected; choose the pharmacy database instead.",
-      "3. /sql/pharmacy.mdf [sqlserver, high, unsupported] - SQL Server discovery is visible, but onboarding support is not implemented."
+      "2. /firebird/security3.fdb [firebird, high, internal] - Firebird security database detected; choose the pharmacy database instead."
     ]);
   });
 });

@@ -160,8 +160,8 @@ On Windows installs, **`%PROGRAMDATA%\PharmaAgentConnector\connector-state.json`
    ```powershell
    New-Item -ItemType Directory -Force C:\Temp\pharma-agent-db-fixture | Out-Null
    New-Item -ItemType File -Force C:\Temp\pharma-agent-db-fixture\PHARMACY.FDB | Out-Null
-   New-Item -ItemType File -Force C:\Temp\pharma-agent-db-fixture\pharmacy.mdf | Out-Null
    New-Item -ItemType Directory -Force C:\Temp\pharma-agent-db-fixture\mysql\data | Out-Null
+   New-Item -ItemType File -Force C:\Temp\pharma-agent-db-fixture\mysql\data\products.ibd | Out-Null
    ```
 
 3. Run the controlled discovery check:
@@ -171,7 +171,7 @@ On Windows installs, **`%PROGRAMDATA%\PharmaAgentConnector\connector-state.json`
    ```
 
 4. Confirm output includes the `path`, `type`, and `confidence` header and
-   candidate rows for Firebird, SQL Server, and MySQL fixture paths.
+   candidate rows for Firebird and MySQL fixture file paths.
 5. Confirm output includes `Scanned paths:` and `Blocked paths:` summary lines.
 6. Confirm no database contents, table structures, sample rows, credentials, or
    connection strings are printed.

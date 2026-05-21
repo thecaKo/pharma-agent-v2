@@ -94,7 +94,7 @@ describe("discover databases CLI runner", () => {
     expect(formatDiscoveryTable([])).toBe("path\ttype\tconfidence\n");
   });
 
-  it("discovers Firebird, MySQL, and SQL Server candidates from a temporary fixture root", async () => {
+  it("discovers Firebird and MySQL candidates from a temporary fixture root", async () => {
     const root = await createTemporaryDirectory();
     const firebirdPath = path.join(root, "PHARMACY.FDB");
     const mysqlDirectory = path.join(root, "mysql", "data", "pharmacy");
@@ -113,7 +113,7 @@ describe("discover databases CLI runner", () => {
     expect(output.stdoutText()).toContain("path\ttype\tconfidence\n");
     expect(output.stdoutText()).toContain(`${firebirdPath}\tfirebird\thigh\n`);
     expect(output.stdoutText()).toContain(`${mysqlPath}\tmysql\thigh\n`);
-    expect(output.stdoutText()).toContain(`${sqlServerPath}\tsqlserver\thigh\n`);
+    expect(output.stdoutText()).not.toContain(sqlServerPath);
     expect(output.stdoutText()).toContain("Scanned paths:");
     expect(output.stdoutText()).toContain("Blocked paths: 0\n");
     expect(output.stderrText()).toBe("");

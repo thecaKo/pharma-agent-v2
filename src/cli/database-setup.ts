@@ -748,7 +748,7 @@ async function selectFieldMappings(
   return mapping as OnboardingFieldMapping;
 }
 
-function deriveMySqlDatabaseName(candidatePath: string): string {
+export function deriveMySqlDatabaseName(candidatePath: string): string {
   const normalized = candidatePath.split(/[\\/]/u).filter((segment) => segment.length > 0);
   for (let index = normalized.length - 2; index >= 0; index -= 1) {
     const segment = normalized[index]?.trim();

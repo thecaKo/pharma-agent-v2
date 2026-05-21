@@ -74,18 +74,15 @@ describe("database setup CLI parser", () => {
 });
 
 describe("database setup helpers", () => {
-  it("formats supported, internal, and unsupported candidates with warnings", () => {
+  it("formats supported and internal candidates with warnings", () => {
     const table = formatCandidateSelectionTable([
       { path: "/db/PHARMACY.FDB", type: "firebird", confidence: "high" },
-      { path: "/db/security3.fdb", type: "firebird", confidence: "high" },
-      { path: "/db/pharmacy.mdf", type: "sqlserver", confidence: "high" }
+      { path: "/db/security3.fdb", type: "firebird", confidence: "high" }
     ]);
 
     expect(table).toContain("/db/PHARMACY.FDB [firebird, high, supported]");
     expect(table).toContain("/db/security3.fdb [firebird, high, internal]");
     expect(table).toContain("Firebird security database detected");
-    expect(table).toContain("/db/pharmacy.mdf [sqlserver, high, unsupported]");
-    expect(table).toContain("SQL Server discovery is visible, but onboarding support is not implemented.");
   });
 
   it("derives Firebird defaults from the selected local file", () => {
@@ -513,45 +510,6 @@ describe("database setup runner", () => {
     expect(discoverDatabaseFiles).toHaveBeenCalledOnce();
     expect(prompt.events[0]).toBe("select:Selecione o modo de configuracao");
     expect(prompt.events[1]).toBe("select:Selecione o banco de dados");
-  });
-
-  it("reprompts when SQL Server is selected and does not collect credentials before a supported choice", async () => {
-    const output = createBufferedIo();
-    const prompt = createPrompt({
-      select: discoverySelect(["2", "1", "products", "updated_at", "product_id", "description", "sale_price", "quantity", "", "", ""]),
-      text: ["127.0.0.1", "3050", "/db/PHARMACY.FDB", "readonly", "db-secret"],
-      confirm: []
-    });
-    const adapter = createAdapter();
-
-    await expect(
-      runDatabaseSetup(baseOptions(), {
-        ...output,
-        prompt,
-        env: { CONNECTOR_TOKEN: "token-1", CONNECTOR_WS_URL: "wss://central/ws" },
-        discoverDatabaseFiles: async () => ({
-          candidates: [
-            { path: "/db/PHARMACY.FDB", type: "firebird", confidence: "high" },
-            { path: "/db/pharmacy.mdf", type: "sqlserver", confidence: "high" }
-          ],
-          scannedPaths: 2,
-          blockedPaths: 0
-        }),
-        createAdapter: () => adapter,
-        writeConnectorEnvFile: fakeWriteConnectorEnvFile,
-        writeDatabaseSetupState: fakeWriteDatabaseSetupState
-      })
-    ).resolves.toMatchObject({
-      mode: "discovery",
-      candidate: expect.objectContaining({ type: "firebird", supported: true }),
-      config: expect.objectContaining({ password: "db-secret" })
-    });
-
-    expect(prompt.events[0]).toBe("select:Selecione o modo de configuracao");
-    expect(prompt.events[1]).toBe("select:Selecione o banco de dados");
-    expect(prompt.events[2]).toBe("select:Selecione o banco de dados");
-    expect(prompt.events[3]).toBe("text:Host do banco");
-    expect(output.stdoutText()).toContain("SQL Server discovery is visible, but onboarding support is not implemented.");
   });
 
   it("reprompts when an invalid database candidate index is selected", async () => {

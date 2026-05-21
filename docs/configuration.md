@@ -206,16 +206,17 @@ npm run discover-databases -- --root <path>
 ```
 
 When no `--root <path>` is provided, the command performs the default
-full-system scan from the current drive or filesystem root. Use `--root <path>`
-to limit the scan to a controlled fixture, known application directory, or other
-approved onboarding scope.
+full-system scan across all Windows drive roots (`A:\` through `Z:\`) or the
+POSIX filesystem root (`/`). Use `--root <path>` to limit the scan to a
+controlled fixture, known application directory, or other approved onboarding
+scope.
 
 Results are printed as human-readable tabular output with these fields:
 
 | Field | Description |
 | --- | --- |
-| `path` | Resolved candidate file or directory path. |
-| `type` | Likely database family, such as `firebird`, `mysql`, or `sqlserver`. |
+| `path` | Resolved candidate file path. |
+| `type` | Likely database family for a supported driver, such as `firebird` or `mysql`. |
 | `confidence` | Metadata-only confidence label: `high`, `medium`, or `low`. |
 
 The command also prints `Scanned paths:` and `Blocked paths:` summary lines.

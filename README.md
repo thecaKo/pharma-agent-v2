@@ -78,16 +78,17 @@ npm run discover-databases --
 npm run discover-databases -- --root <path>
 ```
 
-Without `--root`, discovery scans the system from the current drive or
-filesystem root. Use `--root <path>` to limit validation to a known directory
-during onboarding or manual testing. Output is tabular and includes `path`,
-`type`, and `confidence`, followed by `Scanned paths:` and `Blocked paths:`
-summary lines. `Blocked paths` is an aggregate count of inaccessible paths; the
-command keeps scanning accessible areas.
+Without `--root`, discovery performs a default full-system scan: all Windows
+drive roots (`A:\` through `Z:\`) or the POSIX filesystem root (`/`). Use
+`--root <path>` to limit validation to a known directory during onboarding or
+manual testing. Output is tabular and includes `path`, `type`, and `confidence`,
+followed by `Scanned paths:` and `Blocked paths:` summary lines. `Blocked paths`
+is an aggregate count of inaccessible paths; the command keeps scanning
+accessible areas.
 
-Discovery is metadata-only. It identifies candidate files or directories for
-onboarding, and does not read database contents, table structures, sample rows,
-credentials, or connection strings.
+Discovery is metadata-only. It identifies candidate files with extensions used
+by the supported agent drivers, and does not read database contents, table
+structures, sample rows, credentials, or connection strings.
 
 Run tests:
 
