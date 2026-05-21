@@ -9,11 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.0" />
-    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.0" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Compile Include="Package.wxs" />
     <Compile Include="Files.wxs" />
     <Compile Include="Service.wxs" />

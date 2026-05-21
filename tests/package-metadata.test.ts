@@ -261,7 +261,7 @@ describe("windows installer documentation integration", () => {
     const docs = (await serviceDocs()).replace(/\s+/g, " ");
 
     expect(docs).toContain("Installer-First Installation");
-    expect(docs).toContain("PharmaAgentConnector-Setup.exe");
+    expect(docs).toContain("PharmaAgentConnector.msi");
     expect(docs).toMatch(/administrator privileges/i);
     expect(docs).toContain("Repair");
     expect(docs).toContain("Uninstall");
@@ -295,7 +295,7 @@ describe("windows installer manual verification documentation", () => {
     const manual = (await manualSystemTests()).replace(/\s+/g, " ");
 
     expect(manual).toContain("npm run package:windows-installer");
-    expect(manual).toContain("PharmaAgentConnector-Setup.exe");
+    expect(manual).toContain("PharmaAgentConnector.msi");
     expect(manual).toMatch(/Windows-gated|administrator privileges/i);
     expect(manual).toContain("Automated Checks (Non-Windows and CI)");
   });

@@ -8,24 +8,24 @@ These run on Linux/macOS CI and developer machines without executing the WiX ins
 
 - `npm test` — packaging metadata, ProgramData config precedence, installer WiX source validation, and documentation assertions (including this checklist).
 - `npm run package:windows-installer` — prerequisite and staging checks only; full MSI/bundle build requires a Windows host with WiX Toolset and a staged `node.exe` under `installer/staging`.
-- `RUN_WINDOWS_INSTALLER_TESTS=1 npm test` on Windows — optional gated build of `installer/bin/PharmaAgentConnector-Setup.exe`.
+- `RUN_WINDOWS_INSTALLER_TESTS=1 npm test` on Windows — optional gated build of `installer/bin/Release/PharmaAgentConnector.msi`.
 
 Treat a green non-Windows test run as proof of metadata and docs only. Installer install, repair, uninstall, and service-start behavior below are **Windows-gated** and must be executed manually on a prepared Windows host.
 
 ## Windows Installer Verification (Manual, Windows-Gated)
 
-Use `docs/windows-service.md` (**Installer-First Installation**) as the operator reference. Complete this section after `npm run package:windows-installer` produces `installer/bin/PharmaAgentConnector-Setup.exe` on a Windows build host with WiX Toolset, a staged `node.exe`, and production dependencies under `installer/staging`.
+Use `docs/windows-service.md` (**Installer-First Installation**) as the operator reference. Complete this section after `npm run package:windows-installer` produces `installer/bin/Release/PharmaAgentConnector.msi` on a Windows build host with WiX Toolset, a staged `node.exe`, and production dependencies under `installer/staging`.
 
 ### Prerequisites
 
 1. Use a Windows machine with administrator access for install, repair, and uninstall.
 2. Confirm WiX Toolset is installed and `installer/staging/node.exe` exists before packaging.
 3. From the repository root on that host, run `npm ci`, then `npm run package:windows-installer`.
-4. Confirm `installer/bin/PharmaAgentConnector-Setup.exe` exists and note its path for distribution.
+4. Confirm `installer/bin/Release/PharmaAgentConnector.msi` exists and note its path for distribution.
 
 ### First Install and Service Registration
 
-1. On a clean host (or after removing any prior `PharmaAgentConnector` install), run `PharmaAgentConnector-Setup.exe` with administrator privileges.
+1. On a clean host (or after removing any prior `PharmaAgentConnector` install), run `PharmaAgentConnector.msi` with administrator privileges.
 2. Complete the wizard with a test connector token and central WebSocket URL only. Do not enter database credentials in the installer UI.
 3. Confirm the completion screen reports service installation success and points to the remaining database onboarding step (`npm run database-setup --` / **After Windows Installer Completion** in `docs/configuration.md`).
 4. Confirm `Get-Service -Name PharmaAgentConnector` shows the service installed with automatic startup.
@@ -34,7 +34,7 @@ Use `docs/windows-service.md` (**Installer-First Installation**) as the operator
 
 ### Repair
 
-1. Re-run `PharmaAgentConnector-Setup.exe` on the same host and choose **Repair**.
+1. Re-run `PharmaAgentConnector.msi` on the same host and choose **Repair**.
 2. Confirm `Get-Service -Name PharmaAgentConnector` remains registered and starts automatically.
 3. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-config.json` is restored when it was missing or corrupted.
 4. Confirm repair UI, Windows Installer logs, and completion output do not print the connector token value.

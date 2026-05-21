@@ -14,8 +14,8 @@ import {
   prepareInstallerStaging,
   RUN_WINDOWS_INSTALLER_TESTS_ENV,
   shouldRunPackagingBuild,
-  WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE,
   WINDOWS_INSTALLER_OUTPUT_RELATIVE,
+  WINDOWS_INSTALLER_PROJECT_RELATIVE,
   WINDOWS_INSTALLER_PACKAGE_SCRIPT
 } from "../../src/installer/package-windows-installer.js";
 
@@ -48,19 +48,19 @@ describe("package-windows-installer", () => {
     expect(shouldRunPackagingBuild({}, "win32")).toBe(false);
   });
 
-  it("targets the bundle project and setup executable output", () => {
+  it("targets the MSI project and installer output", () => {
     const projectRoot = "/repo";
     const command = buildInstallerBundleCommand(projectRoot);
 
     expect(command.args).toEqual([
       "build",
-      join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE),
+      join(projectRoot, WINDOWS_INSTALLER_PROJECT_RELATIVE),
       "-c",
       "Release",
       "-restore",
       `-p:StagingDir=${join(projectRoot, "installer", "staging")}`
     ]);
-    expect(WINDOWS_INSTALLER_OUTPUT_RELATIVE).toBe("installer/bin/PharmaAgentConnector-Setup.exe");
+    expect(WINDOWS_INSTALLER_OUTPUT_RELATIVE).toBe("installer/bin/Release/PharmaAgentConnector.msi");
     expect(WINDOWS_INSTALLER_PACKAGE_SCRIPT).toBe("package:windows-installer");
   });
 

@@ -4,8 +4,4 @@
     <PackageReference Include="WixToolset.UI.wixext" Version="5.0.0" />
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.0" />
   </ItemGroup>
-
-  <ItemGroup Condition="'$(OutputType)' == 'Bundle'">
-    <PackageReference Include="WixToolset.BootstrapperApplications.wixext" Version="5.0.0" />
-  </ItemGroup>
 </Project>

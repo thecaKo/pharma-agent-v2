@@ -5,16 +5,11 @@ import { fileURLToPath } from "node:url";
 import { getInstallerServiceMetadata } from "./metadata.js";
 
 export const WINDOWS_INSTALLER_PACKAGE_SCRIPT = "package:windows-installer";
-export const WINDOWS_INSTALLER_OUTPUT_RELATIVE = "installer/bin/PharmaAgentConnector-Setup.exe";
-export const WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE = "installer/ConnectorBundle.wixproj";
-export const WINDOWS_INSTALLER_PACKAGE_PROJECT_RELATIVE = "installer/ConnectorPackage.wixproj";
+export const WINDOWS_INSTALLER_OUTPUT_RELATIVE = "installer/bin/Release/PharmaAgentConnector.msi";
+export const WINDOWS_INSTALLER_PROJECT_RELATIVE = "installer/ConnectorPackage.wixproj";
 export const RUN_WINDOWS_INSTALLER_TESTS_ENV = "RUN_WINDOWS_INSTALLER_TESTS";
 
-export const REQUIRED_WIX_EXTENSION_PACKAGES = [
-  "WixToolset.UI.wixext",
-  "WixToolset.Util.wixext",
-  "WixToolset.BootstrapperApplications.wixext"
-] as const;
+export const REQUIRED_WIX_EXTENSION_PACKAGES = ["WixToolset.UI.wixext", "WixToolset.Util.wixext"] as const;
 
 export const PACKAGING_PREREQUISITES = [
   "Windows host (win32)",
@@ -131,12 +126,12 @@ export async function assertInstallerWixPackagingLayout(projectRoot: string): Pr
   const installerDirectory = join(projectRoot, "installer");
   const sources: string[] = [];
 
-  for (const relativePath of ["Directory.Build.props", "ConnectorPackage.wixproj", "ConnectorBundle.wixproj"]) {
+  for (const relativePath of ["Directory.Build.props", "ConnectorPackage.wixproj"]) {
     try {
       sources.push(await readFile(join(installerDirectory, relativePath), "utf8"));
     } catch {
       throw new PackagingPrerequisiteError(
-        `Missing installer project file ${join("installer", relativePath)}. Run packaging from the repository root (for example C:\\dev\\pharma-agent-v2), not from a nested copy such as pharma-agent-v2\\pharma-agent-v2.`
+        `Missing installer project file ${join("installer", relativePath)}. Run packaging from the repository root (for example C:\\dev\\pharma-agent-v2).`
       );
     }
   }
@@ -146,7 +141,7 @@ export async function assertInstallerWixPackagingLayout(projectRoot: string): Pr
 
   if (missingPackages.length > 0) {
     throw new PackagingPrerequisiteError(
-      `Installer WiX extension packages are not configured (${missingPackages.join(", ")}). Pull the latest repository changes, then run: dotnet restore installer\\ConnectorBundle.wixproj`
+      `Installer WiX extension packages are not configured (${missingPackages.join(", ")}). Pull the latest repository changes, then run: dotnet restore installer\\ConnectorPackage.wixproj`
     );
   }
 
@@ -157,9 +152,9 @@ export async function assertInstallerWixPackagingLayout(projectRoot: string): Pr
   }
 }
 
-export function restoreInstallerProjects(projectRoot: string): void {
-  const bundleProject = join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE);
-  const result = spawnSync(resolveDotnetCommand(), ["restore", bundleProject], {
+export function restoreInstallerProject(projectRoot: string): void {
+  const installerProject = join(projectRoot, WINDOWS_INSTALLER_PROJECT_RELATIVE);
+  const result = spawnSync(resolveDotnetCommand(), ["restore", installerProject], {
     cwd: projectRoot,
     encoding: "utf8",
     stdio: "pipe"
@@ -168,12 +163,12 @@ export function restoreInstallerProjects(projectRoot: string): void {
   if (result.status !== 0) {
     const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
     throw new PackagingPrerequisiteError(
-      `Failed to restore WiX installer projects.${detail ? `\n${detail}` : ""}`
+      `Failed to restore WiX installer project.${detail ? `\n${detail}` : ""}`
     );
   }
 }
 
-export function buildInstallerBundleCommand(projectRoot: string): {
+export function buildInstallerMsiCommand(projectRoot: string): {
   command: string;
   args: string[];
   cwd: string;
@@ -183,7 +178,7 @@ export function buildInstallerBundleCommand(projectRoot: string): {
     command: resolveDotnetCommand(),
     args: [
       "build",
-      join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE),
+      join(projectRoot, WINDOWS_INSTALLER_PROJECT_RELATIVE),
       "-c",
       "Release",
       "-restore",
@@ -193,8 +188,8 @@ export function buildInstallerBundleCommand(projectRoot: string): {
   };
 }
 
-export function runInstallerBundleBuild(projectRoot: string): void {
-  const { command, args, cwd } = buildInstallerBundleCommand(projectRoot);
+export function runInstallerMsiBuild(projectRoot: string): void {
+  const { command, args, cwd } = buildInstallerMsiCommand(projectRoot);
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
@@ -209,13 +204,19 @@ export function runInstallerBundleBuild(projectRoot: string): void {
   }
 }
 
+/** @deprecated Use buildInstallerMsiCommand */
+export const buildInstallerBundleCommand = buildInstallerMsiCommand;
+
+/** @deprecated Use runInstallerMsiBuild */
+export const runInstallerBundleBuild = runInstallerMsiBuild;
+
 export async function packageWindowsInstaller(projectRoot: string): Promise<{ outputPath: string }> {
   assertWindowsPackagingHost();
   assertDotnetAvailable();
   await assertInstallerWixPackagingLayout(projectRoot);
-  restoreInstallerProjects(projectRoot);
+  restoreInstallerProject(projectRoot);
   await prepareInstallerStaging({ projectRoot });
-  runInstallerBundleBuild(projectRoot);
+  runInstallerMsiBuild(projectRoot);
 
   const outputPath = join(projectRoot, WINDOWS_INSTALLER_OUTPUT_RELATIVE);
   await access(outputPath);

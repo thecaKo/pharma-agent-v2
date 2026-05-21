@@ -70,12 +70,12 @@ describe("manual system test documentation consistency", () => {
     expect(manual).toContain("## Windows Installer Verification (Manual, Windows-Gated)");
     expect(manualFlat).toContain("docs/windows-service.md");
     expect(manualFlat).toContain("Installer-First Installation");
-    expect(manual).toContain("PharmaAgentConnector-Setup.exe");
+    expect(manual).toContain("PharmaAgentConnector.msi");
     expect(manual).toContain("npm run package:windows-installer");
 
     for (const shared of [
       "PharmaAgentConnector",
-      "PharmaAgentConnector-Setup.exe",
+      "PharmaAgentConnector.msi",
       "npm run database-setup",
       "Repair",
       "Uninstall",

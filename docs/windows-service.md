@@ -9,8 +9,8 @@ PowerShell service scripts.
 
 1. Build the connector and produce the installer on a Windows build host with WiX
    Toolset and a staged `node.exe` (see `npm run package:windows-installer`).
-2. Distribute and run `PharmaAgentConnector-Setup.exe` from the packaging output
-   (`installer/bin/PharmaAgentConnector-Setup.exe` after a successful build).
+2. Distribute and run `PharmaAgentConnector.msi` from the packaging output
+   (`installer/bin/Release/PharmaAgentConnector.msi` after a successful build).
 3. Complete the wizard: enter the connector token and central WebSocket URL only.
 4. Confirm the completion screen. It reports service installation status and
    points to the remaining database onboarding step.

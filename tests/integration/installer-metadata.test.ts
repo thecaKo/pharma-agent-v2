@@ -52,12 +52,11 @@ describe("installer metadata integration", () => {
     expect(combinedSource).toContain('Start="auto"');
   });
 
-  it("keeps bootstrapper authoring chained to the connector MSI", async () => {
-    const bundle = await readFile(join(installerDirectory, "Bundle.wxs"), "utf8");
+  it("packages the connector as a standalone MSI project", async () => {
+    const packageProject = await readFile(join(installerDirectory, "ConnectorPackage.wixproj"), "utf8");
 
-    expect(bundle).toContain("<Bundle");
-    expect(bundle).toContain("<MsiPackage");
-    expect(bundle).toContain("ConnectorMsi");
+    expect(packageProject).toContain("<OutputType>Package</OutputType>");
+    expect(packageProject).toContain("PharmaAgentConnector");
   });
 });
 
@@ -75,7 +74,7 @@ describe("windows-gated manual install verification", () => {
   it.runIf(process.platform === "win32" && process.env.RUN_WINDOWS_INSTALLER_TESTS === "1")(
     "confirms the built setup executable exists for manual install verification",
     async () => {
-      const setupExe = join(installerDirectory, "bin", "PharmaAgentConnector-Setup.exe");
+      const setupExe = join(installerDirectory, "bin", "Release", "PharmaAgentConnector.msi");
       await expect(readFile(setupExe)).resolves.toBeDefined();
     }
   );
