@@ -49,7 +49,7 @@
       <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
 
       <InstallUISequence>
-        <Show Dialog="WelcomeDlg" Before="ProgressDlg" Condition="NOT Installed" />
+        <Show Dialog="override WelcomeDlg" Before="ProgressDlg" Condition="NOT Installed" />
       </InstallUISequence>
 
       <Property Id="ARPNOMODIFY" Value="1" />
