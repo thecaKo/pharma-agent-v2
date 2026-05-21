@@ -18,12 +18,14 @@ const CATALOG_CURSOR_TYPE_TO_AGENT: Readonly<Record<string, CursorType>> = {
 
 const AGENT_CURSOR_TYPES = new Set<string>(["timestamp", "number"]);
 const ALIASED_QUERY_MARKER = /AS\s+`sourceProductCode`/i;
+export const CATALOG_POLL_INTERVAL_MS = 10_000;
+export const CATALOG_BATCH_SIZE = 500;
 
 interface AgentFieldMapping {
   sourceProductCode: string;
   name: string;
-  price: string;
-  stock: string;
+  price?: string;
+  stock?: string;
   barcode?: string;
   active?: string;
   sourceUpdatedAt?: string;
@@ -36,11 +38,14 @@ interface AgentFieldMapping {
 export function normalizeCatalogConfigPushMessage(message: Record<string, unknown>): Record<string, unknown> {
   const config = message.config;
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    if (typeof message.connectorId === "string" && typeof message.mapping === "object" && message.mapping !== null) {
+      return normalizeFlatConnectorConfigMessage(message);
+    }
     return message;
   }
 
   if (typeof message.connectorId === "string" && typeof message.mapping === "object" && message.mapping !== null) {
-    return message;
+    return normalizeFlatConnectorConfigMessage(message);
   }
 
   const catalog = config as Record<string, unknown>;
@@ -71,14 +76,33 @@ export function normalizeCatalogConfigPushMessage(message: Record<string, unknow
     mapping: {
       mappingVersion: catalogMapping.mappingVersion,
       selectedProductTable: catalog.selectedProductTable,
-      pollIntervalMs: catalogMapping.pollIntervalMs,
-      batchSize: catalogMapping.batchSize,
+      pollIntervalMs: normalizeRuntimeNumber(catalogMapping.pollIntervalMs, CATALOG_POLL_INTERVAL_MS),
+      batchSize: normalizeRuntimeNumber(catalogMapping.batchSize, CATALOG_BATCH_SIZE),
       incrementalQuery,
       cursorField,
       cursorType,
       fields
     }
   };
+}
+
+function normalizeFlatConnectorConfigMessage(message: Record<string, unknown>): Record<string, unknown> {
+  const mapping = message.mapping as Record<string, unknown>;
+  return {
+    ...message,
+    mapping: {
+      ...mapping,
+      pollIntervalMs: normalizeRuntimeNumber(mapping.pollIntervalMs, CATALOG_POLL_INTERVAL_MS),
+      batchSize: normalizeRuntimeNumber(mapping.batchSize, CATALOG_BATCH_SIZE)
+    }
+  };
+}
+
+function normalizeRuntimeNumber(value: unknown, normalizedValue: number): unknown {
+  if (value === undefined || (Number.isInteger(value) && (value as number) > 0)) {
+    return normalizedValue;
+  }
+  return value;
 }
 
 function readCatalogFields(value: unknown): Record<string, string> {

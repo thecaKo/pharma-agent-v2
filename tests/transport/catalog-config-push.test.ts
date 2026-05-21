@@ -5,9 +5,16 @@ import { neoApiCatalogConfigPush } from "../helpers/catalog-config-push.js";
 import { productionConnectorConfig } from "../helpers/mapping.js";
 
 describe("catalog config push normalization", () => {
-  it("passes through flat neo-api connector.config unchanged", () => {
+  it("normalizes flat neo-api connector.config runtime cadence", () => {
     const push = neoApiCatalogConfigPush();
-    expect(normalizeCatalogConfigPushMessage(push)).toEqual(push);
+    expect(normalizeCatalogConfigPushMessage(push)).toEqual({
+      ...push,
+      mapping: {
+        ...(push.mapping as Record<string, unknown>),
+        pollIntervalMs: 10_000,
+        batchSize: 500
+      }
+    });
   });
 
   it("parseServerMessage accepts flat neo-api activation push", () => {
@@ -20,7 +27,8 @@ describe("catalog config push normalization", () => {
       mapping: {
         mappingVersion: "mv-api-1",
         selectedProductTable: "products",
-        pollIntervalMs: 10,
+        pollIntervalMs: 10_000,
+        batchSize: 500,
         cursorField: "updated_at",
         cursorType: "timestamp",
         fields: {
@@ -74,8 +82,8 @@ LIMIT ?`,
       mapping: {
         mappingVersion: "mv-legacy-1",
         selectedProductTable: "products",
-        pollIntervalMs: 10,
-        batchSize: 100,
+        pollIntervalMs: 10_000,
+        batchSize: 500,
         cursorField: "sourceProductUpdatedAt",
         cursorType: "timestamp",
         fields: {
