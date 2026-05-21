@@ -39,6 +39,40 @@ describe("StateStore", () => {
     await expect(new StateStore({ stateFilePath: path }).load()).resolves.toEqual(state);
   });
 
+  it("saves and reloads the last valid mapping for startup resume", async () => {
+    const path = await stateFilePath();
+    const store = new StateStore({ stateFilePath: path });
+    const state: ConnectorState = {
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mapping: {
+        mappingVersion: "mapping-v1",
+        selectedProductTable: "products",
+        pollIntervalMs: 10_000,
+        batchSize: 500,
+        incrementalQuery: "select * from products where id > ? order by id limit ?",
+        cursorField: "id",
+        cursorType: "number",
+        fields: {
+          sourceProductCode: "id",
+          name: "description",
+          price: "sale_price",
+          stock: "quantity"
+        }
+      },
+      mappingVersion: "mapping-v1",
+      selectedProductTable: "products",
+      cursorField: "id",
+      cursorType: "number",
+      sourceProductCodeField: "id",
+      lastAckedCursor: 100
+    };
+
+    await store.save(state);
+
+    await expect(new StateStore({ stateFilePath: path }).load()).resolves.toEqual(state);
+  });
+
   it("leaves the previous valid state readable when atomic replacement fails", async () => {
     const path = await stateFilePath();
     const store = new StateStore({ stateFilePath: path });

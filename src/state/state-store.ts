@@ -19,6 +19,7 @@ export interface StateStoreFileSystem {
 const STATE_KEYS = [
   "connectorId",
   "customerId",
+  "mapping",
   "mappingVersion",
   "selectedProductTable",
   "cursorField",
@@ -82,6 +83,10 @@ export function pickPersistedState(state: ConnectorState): ConnectorState {
     if (state[key] !== undefined) {
       persisted[key] = state[key] as never;
     }
+  }
+
+  if (persisted.mapping !== undefined && !isRecord(persisted.mapping)) {
+    delete persisted.mapping;
   }
 
   persisted.lastAckedCursor = normalizeCursorValue(persisted.cursorType, persisted.lastAckedCursor);
