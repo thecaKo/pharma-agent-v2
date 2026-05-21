@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { access, copyFile, cp, mkdir, rm } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getInstallerServiceMetadata } from "./metadata.js";
@@ -7,7 +7,14 @@ import { getInstallerServiceMetadata } from "./metadata.js";
 export const WINDOWS_INSTALLER_PACKAGE_SCRIPT = "package:windows-installer";
 export const WINDOWS_INSTALLER_OUTPUT_RELATIVE = "installer/bin/PharmaAgentConnector-Setup.exe";
 export const WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE = "installer/ConnectorBundle.wixproj";
+export const WINDOWS_INSTALLER_PACKAGE_PROJECT_RELATIVE = "installer/ConnectorPackage.wixproj";
 export const RUN_WINDOWS_INSTALLER_TESTS_ENV = "RUN_WINDOWS_INSTALLER_TESTS";
+
+export const REQUIRED_WIX_EXTENSION_PACKAGES = [
+  "WixToolset.UI.wixext",
+  "WixToolset.Util.wixext",
+  "WixToolset.BootstrapperApplications.wixext"
+] as const;
 
 export const PACKAGING_PREREQUISITES = [
   "Windows host (win32)",
@@ -120,6 +127,52 @@ export async function prepareInstallerStaging(options: {
   return { stagingDir };
 }
 
+export async function assertInstallerWixPackagingLayout(projectRoot: string): Promise<void> {
+  const installerDirectory = join(projectRoot, "installer");
+  const sources: string[] = [];
+
+  for (const relativePath of ["Directory.Build.props", "ConnectorPackage.wixproj", "ConnectorBundle.wixproj"]) {
+    try {
+      sources.push(await readFile(join(installerDirectory, relativePath), "utf8"));
+    } catch {
+      throw new PackagingPrerequisiteError(
+        `Missing installer project file ${join("installer", relativePath)}. Run packaging from the repository root (for example C:\\dev\\pharma-agent-v2), not from a nested copy such as pharma-agent-v2\\pharma-agent-v2.`
+      );
+    }
+  }
+
+  const combined = sources.join("\n");
+  const missingPackages = REQUIRED_WIX_EXTENSION_PACKAGES.filter((packageId) => !combined.includes(packageId));
+
+  if (missingPackages.length > 0) {
+    throw new PackagingPrerequisiteError(
+      `Installer WiX extension packages are not configured (${missingPackages.join(", ")}). Pull the latest repository changes, then run: dotnet restore installer\\ConnectorBundle.wixproj`
+    );
+  }
+
+  if (!combined.includes("WixToolset.Sdk/5.0.0")) {
+    throw new PackagingPrerequisiteError(
+      "Installer projects must target WixToolset.Sdk/5.0.0. Pull the latest repository changes before packaging."
+    );
+  }
+}
+
+export function restoreInstallerProjects(projectRoot: string): void {
+  const bundleProject = join(projectRoot, WINDOWS_INSTALLER_BUNDLE_PROJECT_RELATIVE);
+  const result = spawnSync(resolveDotnetCommand(), ["restore", bundleProject], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: "pipe"
+  });
+
+  if (result.status !== 0) {
+    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    throw new PackagingPrerequisiteError(
+      `Failed to restore WiX installer projects.${detail ? `\n${detail}` : ""}`
+    );
+  }
+}
+
 export function buildInstallerBundleCommand(projectRoot: string): {
   command: string;
   args: string[];
@@ -159,6 +212,8 @@ export function runInstallerBundleBuild(projectRoot: string): void {
 export async function packageWindowsInstaller(projectRoot: string): Promise<{ outputPath: string }> {
   assertWindowsPackagingHost();
   assertDotnetAvailable();
+  await assertInstallerWixPackagingLayout(projectRoot);
+  restoreInstallerProjects(projectRoot);
   await prepareInstallerStaging({ projectRoot });
   runInstallerBundleBuild(projectRoot);
 

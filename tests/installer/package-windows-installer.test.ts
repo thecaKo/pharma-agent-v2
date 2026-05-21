@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertDotnetAvailable,
+  assertInstallerWixPackagingLayout,
   assertWindowsPackagingHost,
   buildInstallerBundleCommand,
   formatPackagingPrerequisites,
@@ -67,6 +68,11 @@ describe("package-windows-installer", () => {
     expect(() => assertDotnetAvailable("pharma-agent-missing-dotnet-command")).toThrow(
       /Missing \.NET SDK prerequisite/u
     );
+  });
+
+  it("validates installer WiX extension layout in the repository", async () => {
+    const projectRoot = join(import.meta.dirname, "..", "..");
+    await expect(assertInstallerWixPackagingLayout(projectRoot)).resolves.toBeUndefined();
   });
 
   it("stages built connector output and node.exe before WiX build", async () => {

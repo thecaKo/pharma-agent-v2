@@ -1,0 +1,18 @@
+
+> @pharma-agent/connector@0.1.0 start /home/cako/Documents/projetos/pharmachatbot/pharma-agent-v2
+> node dist/main.js
+
+{"level":"info","time":"2026-05-21T12:37:06.475Z","event":"service.startup","version":"0.1.0","dbDriver":"mysql"}
+{"level":"info","time":"2026-05-21T12:37:06.476Z","event":"configuration.loaded","websocketUrl":"ws://localhost:3335/connectors/ws","dbDriver":"mysql","dbHost":"127.0.0.1","dbPort":3306,"dbName":"pharmacy","dbUser":"readonly"}
+{"level":"info","time":"2026-05-21T12:37:06.476Z","event":"websocket connecting","url":"ws://localhost:3335/connectors/ws"}
+{"level":"info","time":"2026-05-21T12:37:06.501Z","event":"websocket connected","url":"ws://localhost:3335/connectors/ws"}
+{"level":"info","time":"2026-05-21T12:37:06.501Z","event":"websocket.connected","reconnectAttemptCount":0}
+{"level":"info","time":"2026-05-21T12:37:06.596Z","event":"mapping.active","connectorId":"b873a872-2ab7-484f-bec2-437552e983a0","customerId":"2","mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0","reason":"saved mapping resume","pollIntervalMs":10000,"batchSize":500,"selectedProductTable":"products_for_pollout_images"}
+{"level":"info","time":"2026-05-21T12:37:06.597Z","event":"poll scheduled","delayMs":0,"mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0"}
+{"level":"info","time":"2026-05-21T12:37:06.599Z","event":"poll started","connectorId":"b873a872-2ab7-484f-bec2-437552e983a0","customerId":"2","mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0","cursorBefore":29015,"dbLimit":500}
+{"level":"warn","time":"2026-05-21T12:37:06.613Z","event":"connector.error","errorCode":"POLL_FAILED","connectorId":"b873a872-2ab7-484f-bec2-437552e983a0","customerId":"2","mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0"}
+{"level":"info","time":"2026-05-21T12:37:06.613Z","event":"poll scheduled","delayMs":10000,"mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0"}
+{"level":"warn","time":"2026-05-21T12:37:06.798Z","event":"websocket disconnected","code":1005,"reason":""}
+{"level":"warn","time":"2026-05-21T12:37:06.799Z","event":"websocket.disconnected","mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0"}
+{"level":"info","time":"2026-05-21T12:37:06.799Z","event":"service.shutdown","connectorId":"b873a872-2ab7-484f-bec2-437552e983a0","customerId":"2","mappingVersion":"00474911-2a92-4b91-86b5-7df94b38f6c0"}
+ ELIFECYCLE  Command failed.
