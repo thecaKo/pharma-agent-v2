@@ -37,12 +37,12 @@
       <Publish Dialog="ConnectorExitDialog" Control="Finish" Event="EndDialog" Value="Return" />
 
       <InstallUISequence>
-        <Show Dialog="ExitDialog" OnExit="success" Condition="0" />
+        <Show Dialog="override ExitDialog" OnExit="success" Condition="0" />
         <Show Dialog="ConnectorExitDialog" OnExit="success" />
       </InstallUISequence>
 
       <AdminUISequence>
-        <Show Dialog="ExitDialog" OnExit="success" Condition="0" />
+        <Show Dialog="override ExitDialog" OnExit="success" Condition="0" />
         <Show Dialog="ConnectorExitDialog" OnExit="success" />
       </AdminUISequence>
     </UI>
