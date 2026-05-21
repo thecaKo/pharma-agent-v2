@@ -22,11 +22,13 @@ describe("connector startup command", () => {
   it("exits without configuration errors for a complete test environment", () => {
     const result = spawnSync("node", startupArgs(), {
       cwd: PROJECT_ROOT,
-      env: {
+      env: processEnv({
         PATH: process.env.PATH,
+        NODE_ENV: "dev",
+        node_env: "dev",
         CONNECTOR_VALIDATE_ONLY: "1",
         ...validEnv()
-      },
+      }),
       encoding: "utf8"
     });
 
@@ -39,15 +41,17 @@ describe("connector startup command", () => {
   it("exits non-zero and emits redacted diagnostics when required variables are missing", () => {
     const result = spawnSync("node", startupArgs(), {
       cwd: PROJECT_ROOT,
-      env: {
+      env: processEnv({
         PATH: process.env.PATH,
+        NODE_ENV: "dev",
+        node_env: "dev",
         CONNECTOR_VALIDATE_ONLY: "1",
         ...validEnv({
           CONNECTOR_TOKEN: "secret-token-that-must-not-print",
           DB_PASSWORD: "secret-password-that-must-not-print"
         }),
         DB_USER: ""
-      },
+      }),
       encoding: "utf8"
     });
 
@@ -75,9 +79,11 @@ describe("connector startup command", () => {
 
     const result = spawnSync("node", startupArgs(cwd), {
       cwd: PROJECT_ROOT,
-      env: {
-        PATH: process.env.PATH
-      },
+      env: processEnv({
+        PATH: process.env.PATH,
+        NODE_ENV: "dev",
+        node_env: "dev"
+      }),
       encoding: "utf8"
     });
 
@@ -104,12 +110,14 @@ describe("connector startup command", () => {
 
     const result = spawnSync("node", startupArgs(cwd), {
       cwd: PROJECT_ROOT,
-      env: {
+      env: processEnv({
         PATH: process.env.PATH,
+        NODE_ENV: "dev",
+        node_env: "dev",
         CONNECTOR_VALIDATE_ONLY: "1",
         PROGRAMDATA: programDataRoot,
         ...validDatabaseEnv()
-      },
+      }),
       encoding: "utf8"
     });
 
@@ -138,13 +146,15 @@ describe("connector startup command", () => {
 
     const result = spawnSync("node", startupArgs(cwd), {
       cwd: PROJECT_ROOT,
-      env: {
+      env: processEnv({
         PATH: process.env.PATH,
+        NODE_ENV: "dev",
+        node_env: "dev",
         CONNECTOR_VALIDATE_ONLY: "1",
         PROGRAMDATA: programDataRoot,
         ...validDatabaseEnv(),
         CONNECTOR_WS_URL: "wss://env-precedence.example/connectors/ws"
-      },
+      }),
       encoding: "utf8"
     });
 
@@ -173,11 +183,13 @@ describe("connector startup command", () => {
 
     const result = spawnSync("node", startupArgs(cwd), {
       cwd: PROJECT_ROOT,
-      env: {
+      env: processEnv({
         PATH: process.env.PATH,
+        NODE_ENV: "dev",
+        node_env: "dev",
         CONNECTOR_VALIDATE_ONLY: "1",
         PROGRAMDATA: programDataRoot
-      },
+      }),
       encoding: "utf8"
     });
 
@@ -198,4 +210,10 @@ function startupArgs(workingDirectory?: string): string[] {
     "--eval",
     `${prelude}import { runMain } from ${JSON.stringify(MAIN_FILE)}; process.exitCode = await runMain(process.env);`
   ];
+}
+
+function processEnv(values: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
 }

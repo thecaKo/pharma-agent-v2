@@ -9,7 +9,7 @@ import * as adapterFactory from "../../src/db/adapter-factory.js";
 import { buildMockPanelConnectorConfig } from "../../src/cli/mock-panel.js";
 import type { SourceDatabaseAdapter } from "../../src/db/source-adapter.js";
 import type { ProductChangeBatch } from "../../src/poller/batch-builder.js";
-import { ConnectorRuntime, type RuntimeTransport } from "../../src/service/runtime.js";
+import { ConnectorRuntime, startConnectorRuntime, type RuntimeTransport } from "../../src/service/runtime.js";
 import { StateStore } from "../../src/state/state-store.js";
 import type {
   AdminRequestMessage,
@@ -31,6 +31,21 @@ import { validMapping } from "../helpers/mapping.js";
 describe("ConnectorRuntime", () => {
   it("fails fast when startup configuration validation fails", () => {
     expect(() => new ConnectorRuntime({ env: validEnv({ DB_PASSWORD: "" }) })).toThrow(ConfigValidationError);
+  });
+
+  it("closes transport when runtime startup fails", async () => {
+    const transport = new FakeTransport();
+    transport.connect.mockRejectedValueOnce(new Error("connect failed"));
+
+    await expect(startConnectorRuntime({
+      env: validEnv(),
+      logger: silentLogger(),
+      transport,
+      adapter: adapterWithRows([]),
+      stateStore: new StateStore({ stateFilePath: join(tmpdir(), `runtime-${randomUUID()}.json`) })
+    })).rejects.toThrow("connect failed");
+
+    expect(transport.close).toHaveBeenCalledOnce();
   });
 
   it("connects WebSocket before starting polling", async () => {
@@ -168,6 +183,73 @@ describe("ConnectorRuntime", () => {
     expect((await stateStore.load()).lastAckedCursor).toBeNull();
     expect((await stateStore.load()).lastSuccessfulSendAt).toBeUndefined();
     expect(runtime.getState().pollingPaused).toBe(false);
+  });
+
+  it("resumes polling from the saved valid mapping on startup", async () => {
+    const stateStore = await tempStateStore();
+    await stateStore.save({
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mapping: validMapping({
+        selectedProductTable: "products",
+        cursorField: "product_id",
+        cursorType: "number",
+        incrementalQuery: "select * from products where product_id > ? order by product_id limit ?"
+      }),
+      mappingVersion: "mapping-v1",
+      selectedProductTable: "products",
+      cursorField: "product_id",
+      cursorType: "number",
+      sourceProductCodeField: "product_id",
+      lastAckedCursor: 100
+    });
+    const adapter = adapterWithRows([
+      {
+        product_id: 101,
+        description: "Dipirona",
+        sale_price: "12.50",
+        quantity: "7"
+      }
+    ]);
+    const runtime = createRuntime({
+      stateStore,
+      adapter
+    });
+
+    await runtime.start();
+    await waitUntil(() => runtime.getState().activeMapping?.mappingVersion === "mapping-v1");
+    await runtime.pollOnceForTest();
+
+    expect(adapter.queryChanges).toHaveBeenCalledWith({
+      sql: "select * from products where product_id > ? order by product_id limit ?",
+      cursor: 100,
+      limit: 500
+    });
+    expect(runtime.getState().pollingPaused).toBe(false);
+    expect(runtime.getState().activeMapping?.cursorField).toBe("product_id");
+    expect((await stateStore.load()).lastAckedCursor).toBe(100);
+  });
+
+  it("does not resume polling from an invalid saved mapping", async () => {
+    const stateStore = await tempStateStore();
+    await stateStore.save({
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mapping: {
+        ...validMapping(),
+        incrementalQuery: ""
+      },
+      mappingVersion: "mapping-v1"
+    });
+    const runtime = createRuntime({
+      stateStore,
+      adapter: adapterWithRows([])
+    });
+
+    await runtime.start();
+
+    expect(runtime.getState().activeMapping).toBeUndefined();
+    expect(runtime.getState().pollingPaused).toBe(true);
   });
 
   it("batch.ack with nextAction=reload_config pauses polling until a new mapping is active", async () => {
@@ -564,6 +646,7 @@ describe("ConnectorRuntime", () => {
     const scanRoot = await mkdtemp(join(tmpdir(), "file-discovery-runtime-"));
     await mkdir(join(scanRoot, "nested"), { recursive: true });
     await writeFile(join(scanRoot, "nested", "note.txt"), "x");
+    await writeFile(join(scanRoot, "nested", "pharmacy.fdb"), "x");
 
     const runtime = createRuntime({ transport, adapter });
     await runtime.start();
@@ -582,7 +665,8 @@ describe("ConnectorRuntime", () => {
       entries: expect.any(Array)
     });
     expect(message?.failureReason).toBeUndefined();
-    expect(message?.entries.some((entry) => entry.name === "note.txt")).toBe(true);
+    expect(message?.entries.some((entry) => entry.name === "note.txt")).toBe(false);
+    expect(message?.entries.some((entry) => entry.name === "pharmacy.fdb")).toBe(true);
 
     await runtime.shutdown();
   });

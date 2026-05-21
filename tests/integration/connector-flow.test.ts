@@ -206,6 +206,7 @@ describe("connector runtime flow", () => {
       logger: createLogger({
         level: "info",
         secrets: ["test-connector-token", "test-db-password"],
+        nodeEnv: "dev",
         output: {
           log: (line) => logLines.push(line),
           error: (line) => logLines.push(line)
@@ -218,6 +219,7 @@ describe("connector runtime flow", () => {
 
     await waitFor(() => runtime!.getState().activeMapping?.mappingVersion === "mv-api-1");
     expect(runtime.getState().pollingPaused).toBe(false);
+    await runtime.pollOnceForTest();
     expect(adapter.queryChanges).toHaveBeenCalled();
     expect(logLines.some((line) => line.includes('"event":"mapping.active"'))).toBe(true);
     expect(logLines.some((line) => line.includes('"event":"poll started"'))).toBe(true);
@@ -225,18 +227,15 @@ describe("connector runtime flow", () => {
     const batchMessage = await nextProductBatch(server);
     expect(batchMessage.parsed).toMatchObject({
       type: "product.batch",
-      batch: {
-        connectorId: "connector-1",
-        customerId: "customer-1",
-        mappingVersion: "mv-api-1"
-      }
+      mappingVersion: "mv-api-1"
     });
-    expect((batchMessage.parsed.batch as { records: unknown[] }).records).toMatchObject([
+    expect(batchMessage.parsed).not.toHaveProperty("batch");
+    expect((batchMessage.parsed as { products: unknown[] }).products).toMatchObject([
       {
-        sourceProductCode: "SKU-1",
+        code: "SKU-1",
         name: "Produto 1",
-        price: 10,
-        stock: 5,
+        salePrice: 10,
+        stockQuantity: 5,
         sourceUpdatedAt: "2026-05-16T20:00:01.000Z"
       }
     ]);
@@ -270,34 +269,33 @@ describe("connector runtime flow", () => {
     server.sendJson(productionConnectorConfig());
 
     const batchMessage = await nextProductBatch(server);
-    const batch = batchMessage.parsed.batch as Record<string, unknown>;
+    const batch = batchMessage.parsed as Record<string, unknown>;
     expect(batchMessage.parsed).toMatchObject({
       type: "product.batch",
-      batch: {
-        connectorId: "connector-1",
-        customerId: "customer-1",
-        mappingVersion: "mapping-v1",
-        cursorBefore: "1970-01-01T00:00:00.000Z",
-        cursorAfter: "2026-05-16T20:00:02.000Z"
+      mappingVersion: "mapping-v1",
+      cursor: {
+        before: "1970-01-01T00:00:00.000Z",
+        after: "2026-05-16T20:00:02.000Z"
       }
     });
-    expect(batch.records).toHaveLength(2);
-    expect(batch.records).toEqual([
+    expect(batchMessage.parsed).not.toHaveProperty("batch");
+    expect(batch.products).toHaveLength(2);
+    expect(batch.products).toEqual([
       {
-        sourceProductCode: "P-001",
+        code: "P-001",
         name: "Dipirona 500mg",
         barcode: "7891234567890",
-        price: 12.5,
-        stock: 7,
+        salePrice: 12.5,
+        stockQuantity: 7,
         active: true,
         sourceUpdatedAt: "2026-05-16T20:00:01.000Z"
       },
       {
-        sourceProductCode: "P-002",
+        code: "P-002",
         name: "Paracetamol 750mg",
         barcode: "7899876543210",
-        price: 8.9,
-        stock: 4,
+        salePrice: 8.9,
+        stockQuantity: 4,
         active: false,
         sourceUpdatedAt: "2026-05-16T20:00:02.000Z"
       }
@@ -352,19 +350,17 @@ describe("connector runtime flow", () => {
     const batchMessage = await nextProductBatch(server);
     expect(batchMessage.parsed).toMatchObject({
       type: "product.batch",
-      batch: {
-        connectorId: "connector-1",
-        customerId: "customer-1",
-        mappingVersion: "mapping-v1",
-        cursorBefore: "1970-01-01T00:00:00.000Z",
-        cursorAfter: "2026-05-16T20:00:02.000Z"
+      mappingVersion: "mapping-v1",
+      cursor: {
+        before: "1970-01-01T00:00:00.000Z",
+        after: "2026-05-16T20:00:02.000Z"
       }
     });
-    expect((batchMessage.parsed.batch as { records: unknown[] }).records).toHaveLength(2);
+    expect((batchMessage.parsed as { products: unknown[] }).products).toHaveLength(2);
 
     server.sendJson({
       type: "batch.ack",
-      batchId: (batchMessage.parsed.batch as { batchId: string }).batchId,
+      batchId: (batchMessage.parsed as { batchId: string }).batchId,
       accepted: true,
       acceptedRecordCount: 2,
       rejectedRecordCount: 0,
@@ -392,7 +388,7 @@ describe("connector runtime flow", () => {
     const firstBatch = await nextProductBatch(server);
     server.sendJson({
       type: "batch.ack",
-      batchId: (firstBatch.parsed.batch as { batchId: string }).batchId,
+      batchId: (firstBatch.parsed as { batchId: string }).batchId,
       accepted: true,
       acceptedRecordCount: 1,
       rejectedRecordCount: 0,
@@ -507,6 +503,7 @@ describe("connector runtime flow", () => {
     const scanRoot = await mkdtemp(join(tmpdir(), "connector-flow-file-discovery-"));
     await mkdir(join(scanRoot, "data"), { recursive: true });
     await writeFile(join(scanRoot, "data", "file.csv"), "a");
+    await writeFile(join(scanRoot, "data", "pharmacy.fdb"), "a");
 
     runtime = createRuntime({
       adapter: adapterWithRows([])
@@ -529,7 +526,8 @@ describe("connector runtime flow", () => {
     });
     const parsed = response.parsed as FileDiscoveryScanResultMessage;
     expect(parsed.failureReason).toBeUndefined();
-    expect(parsed.entries.some((entry) => entry.name === "file.csv")).toBe(true);
+    expect(parsed.entries.some((entry) => entry.name === "file.csv")).toBe(false);
+    expect(parsed.entries.some((entry) => entry.name === "pharmacy.fdb")).toBe(true);
   });
 
   it("mock central disconnect triggers reconnect without creating an inbound connector endpoint", async () => {

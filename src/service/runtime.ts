@@ -137,7 +137,8 @@ export class ConnectorRuntime {
       options.logger ??
       createLogger({
         level: this.config.logLevel,
-        secrets: configSecrets(this.config)
+        secrets: configSecrets(this.config),
+        nodeEnv: options.env?.NODE_ENV ?? options.env?.node_env
       });
     this.stateStore =
       options.stateStore ??
@@ -180,6 +181,7 @@ export class ConnectorRuntime {
     });
 
     await this.transport.connect();
+    await this.resumeSavedMappingIfAvailable();
   }
 
   public async shutdown(): Promise<void> {
@@ -253,13 +255,55 @@ export class ConnectorRuntime {
     this.pausePolling("mapping activation");
 
     const mapping = validateMappingConfig(message.mapping);
-    await this.ensureAdapterConnected();
-
-    const previous = await this.stateStore.load();
-    const keepCursor = canReuseAcknowledgedCursor(previous, mapping);
-    const nextState: ConnectorState = {
+    await this.activateMapping({
       connectorId: message.connectorId,
       customerId: message.customerId,
+      mapping
+    });
+  }
+
+  private async resumeSavedMappingIfAvailable(): Promise<void> {
+    const state = await this.stateStore.load();
+    if (!state.connectorId || !state.customerId || !state.mapping) {
+      return;
+    }
+
+    try {
+      const mapping = validateMappingConfig(state.mapping);
+      await this.activateMapping({
+        connectorId: state.connectorId,
+        customerId: state.customerId,
+        mapping,
+        previousState: state,
+        reason: "saved mapping resume"
+      });
+    } catch (error) {
+      this.logger.warn("mapping.resume_failed", {
+        errorCode: "SAVED_MAPPING_INVALID",
+        message: error instanceof Error ? error.message : String(error),
+        connectorId: state.connectorId,
+        customerId: state.customerId,
+        mappingVersion: state.mappingVersion
+      });
+    }
+  }
+
+  private async activateMapping(input: {
+    connectorId: string;
+    customerId: string;
+    mapping: ValidatedMappingConfig;
+    previousState?: ConnectorState;
+    reason?: string;
+  }): Promise<void> {
+    const { connectorId, customerId, mapping } = input;
+    await this.ensureAdapterConnected();
+
+    const previous = input.previousState ?? (await this.stateStore.load());
+    const keepCursor = canReuseAcknowledgedCursor(previous, mapping);
+    const nextState: ConnectorState = {
+      connectorId,
+      customerId,
+      mapping,
       mappingVersion: mapping.mappingVersion,
       selectedProductTable: mapping.selectedProductTable,
       cursorField: mapping.cursorField,
@@ -272,15 +316,15 @@ export class ConnectorRuntime {
     await this.saveState(nextState);
 
     this.activeMapping = mapping;
-    this.activeConnectorId = message.connectorId;
-    this.activeCustomerId = message.customerId;
+    this.activeConnectorId = connectorId;
+    this.activeCustomerId = customerId;
     this.inFlightBatch = undefined;
     this.poller = new IncrementalPoller({
       adapter: this.adapter,
       mapping,
       state: this.stateStore,
-      connectorId: message.connectorId,
-      customerId: message.customerId,
+      connectorId,
+      customerId,
       isTransportReady: () => this.transport.isConnected(),
       hasUnacknowledgedBatch: () => this.inFlightBatch !== undefined,
       logger: this.logger,
@@ -289,9 +333,12 @@ export class ConnectorRuntime {
     this.pollingPaused = false;
 
     this.logger.info("mapping.active", {
-      connectorId: message.connectorId,
-      customerId: message.customerId,
+      connectorId,
+      customerId,
       mappingVersion: mapping.mappingVersion,
+      ...(input.reason ? { reason: input.reason } : {}),
+      pollIntervalMs: mapping.pollIntervalMs,
+      batchSize: mapping.batchSize,
       ...(mapping.selectedProductTable ? { selectedProductTable: mapping.selectedProductTable } : {})
     });
     this.sendHeartbeat();
@@ -476,10 +523,9 @@ export class ConnectorRuntime {
     });
 
     const rawRoot =
-      typeof request.rootPath === "string" ? request.rootPath.trim() : "";
-    const workspace = rawRoot.length > 0 ? path.resolve(rawRoot) : process.cwd();
+      typeof request.rootPath === "string" ? request.rootPath.trim() : undefined;
 
-    const scan = await scanLocalFilesystem(workspace);
+    const scan = await scanLocalFilesystem(rawRoot);
 
     const message = scan.ok
       ? buildFileDiscoveryScanSuccessResult(correlationId, scan.entries)
@@ -611,6 +657,10 @@ export class ConnectorRuntime {
       return;
     }
     this.stopPollTimer();
+    this.logger.info("poll scheduled", {
+      delayMs,
+      mappingVersion: this.activeMapping?.mappingVersion
+    });
     this.pollTimer = this.timers.setTimeout(() => {
       void this.runPollCycle();
     }, delayMs);
@@ -684,7 +734,12 @@ export class ConnectorRuntime {
 
 export async function startConnectorRuntime(options: ConnectorRuntimeOptions = {}): Promise<ConnectorRuntime> {
   const runtime = new ConnectorRuntime(options);
-  await runtime.start();
+  try {
+    await runtime.start();
+  } catch (error) {
+    await runtime.shutdown();
+    throw error;
+  }
   return runtime;
 }
 
