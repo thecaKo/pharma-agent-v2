@@ -106,20 +106,23 @@ export async function scanLocalFilesystem(
 
   let roots: string[];
   if (trimmedRoot.length > 0) {
+    let resolvedRoot: string;
     try {
-      roots = [path.resolve(trimmedRoot)];
+      resolvedRoot = path.resolve(trimmedRoot);
     } catch {
       return { ok: false, failureReason: "Invalid root path" };
     }
 
     try {
-      const rootStat = await stat(roots[0]);
+      const rootStat = await stat(resolvedRoot);
       if (!rootStat.isDirectory()) {
         return { ok: false, failureReason: "Root path is not a directory" };
       }
     } catch {
       return { ok: false, failureReason: "Unable to access root directory" };
     }
+
+    roots = [resolvedRoot];
   } else {
     roots = resolveDatabaseDiscoveryRoots();
   }
