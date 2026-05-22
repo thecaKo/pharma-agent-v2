@@ -107,7 +107,13 @@ function normalizeState(value: unknown): ConnectorState {
 async function fsyncFile(path: string): Promise<void> {
   const handle = await open(path, "r");
   try {
-    await handle.sync();
+    try {
+      await handle.sync();
+    } catch (error) {
+      if (!isIgnorableFsyncError(error)) {
+        throw error;
+      }
+    }
   } finally {
     await handle.close();
   }
@@ -129,6 +135,10 @@ async function fsyncDirectory(path: string): Promise<void> {
 
 function isMissingFileError(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+export function isIgnorableFsyncError(error: unknown): boolean {
+  return isRecord(error) && (error.code === "EPERM" || error.code === "EINVAL" || error.code === "ENOTSUP");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

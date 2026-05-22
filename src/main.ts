@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig, configSecrets, ConfigValidationError } from "./config/env.js";
 import { ProgramDataConfigError } from "./config/programdata-config.js";
 import {
@@ -169,7 +171,31 @@ function sleepMs(ms: number): Promise<void> {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isMainModule(metaUrl: string, argvEntry = process.argv[1]): boolean {
+  if (!argvEntry) {
+    return false;
+  }
+
+  const compareAsWindowsPath = isWindowsAbsolutePath(argvEntry);
+  const modulePath = fileURLToPath(metaUrl);
+
+  return normalizeEntrypointPath(modulePath, compareAsWindowsPath) === normalizeEntrypointPath(argvEntry, compareAsWindowsPath);
+}
+
+function normalizeEntrypointPath(value: string, compareAsWindowsPath: boolean): string {
+  if (!compareAsWindowsPath) {
+    return path.resolve(value);
+  }
+
+  const valueWithoutFileUrlLeadingSlash = value.replace(/^\/([A-Za-z]:[\\/])/, "$1");
+  return path.win32.resolve(valueWithoutFileUrlLeadingSlash).toLowerCase();
+}
+
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
+}
+
+if (isMainModule(import.meta.url)) {
   if (process.env.CONNECTOR_VALIDATE_ONLY === "1") {
     process.exitCode = await runMain(process.env);
   } else {

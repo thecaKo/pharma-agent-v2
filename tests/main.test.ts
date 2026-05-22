@@ -6,7 +6,7 @@ import {
   CONNECTOR_CONFIG_FILE_NAME,
   INSTALLER_CONFIG_DIR_NAME
 } from "../src/config/programdata-config.js";
-import { runMain, runServiceMain, validateStartup, waitForServiceShutdown } from "../src/main.js";
+import { isMainModule, runMain, runServiceMain, validateStartup, waitForServiceShutdown } from "../src/main.js";
 import { validDatabaseEnv, validEnv } from "./helpers/env.js";
 
 vi.mock("../src/service/runtime.js", () => ({
@@ -228,6 +228,19 @@ describe("startup entrypoint", () => {
       log.mockRestore();
       error.mockRestore();
     }
+  });
+
+  it("detects the main module when Windows file URLs are compared with Windows argv paths", () => {
+    expect(
+      isMainModule(
+        "file:///C:/Program%20Files/PharmaAgentConnector/dist/main.js",
+        "C:\\Program Files\\PharmaAgentConnector\\dist\\main.js"
+      )
+    ).toBe(true);
+  });
+
+  it("does not detect the main module when argv entry is missing", () => {
+    expect(isMainModule("file:///C:/Program%20Files/PharmaAgentConnector/dist/main.js", undefined)).toBe(false);
   });
 });
 

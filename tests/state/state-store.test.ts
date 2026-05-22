@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { StateStore, pickPersistedState } from "../../src/state/state-store.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { StateStore, isIgnorableFsyncError, pickPersistedState } from "../../src/state/state-store.js";
 import type { ConnectorState } from "../../src/state/state-types.js";
 
 const tempDirs: string[] = [];
@@ -172,6 +172,35 @@ describe("StateStore", () => {
       lastAckedCursor: "2026-05-16T23:00:02.000Z"
     });
   });
+
+  it("continues saving state when file fsync fails with Windows EPERM", async () => {
+    const path = await stateFilePath();
+    const sync = await spyOnFileHandleSync(path);
+    sync.mockRejectedValueOnce(fsError("EPERM"));
+
+    try {
+      await expect(new StateStore({ stateFilePath: path }).save({ mappingVersion: "mapping-v1" })).resolves.toBeUndefined();
+      await expect(new StateStore({ stateFilePath: path }).load()).resolves.toEqual({
+        mappingVersion: "mapping-v1"
+      });
+    } finally {
+      sync.mockRestore();
+    }
+  });
+
+  it("keeps fatal fsync errors fatal", async () => {
+    const path = await stateFilePath();
+    const sync = await spyOnFileHandleSync(path);
+    sync.mockRejectedValueOnce(fsError("ENOSPC"));
+
+    try {
+      await expect(new StateStore({ stateFilePath: path }).save({ mappingVersion: "mapping-v1" })).rejects.toMatchObject({
+        code: "ENOSPC"
+      });
+    } finally {
+      sync.mockRestore();
+    }
+  });
 });
 
 describe("pickPersistedState", () => {
@@ -189,8 +218,33 @@ describe("pickPersistedState", () => {
   });
 });
 
+describe("isIgnorableFsyncError", () => {
+  it.each(["EPERM", "EINVAL", "ENOTSUP"])("treats %s as ignorable", (code) => {
+    expect(isIgnorableFsyncError(fsError(code))).toBe(true);
+  });
+
+  it("does not treat disk-full errors as ignorable", () => {
+    expect(isIgnorableFsyncError(fsError("ENOSPC"))).toBe(false);
+  });
+});
+
 async function stateFilePath(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "connector-state-"));
   tempDirs.push(dir);
   return join(dir, "ProgramData", "PharmaAgentConnector", "connector-state.json");
+}
+
+async function spyOnFileHandleSync(path: string): Promise<ReturnType<typeof vi.spyOn>> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, "", "utf8");
+  const handle = await open(path, "r");
+  const fileHandlePrototype = Object.getPrototypeOf(handle) as Awaited<ReturnType<typeof open>>;
+  await handle.close();
+  return vi.spyOn(fileHandlePrototype, "sync");
+}
+
+function fsError(code: string): NodeJS.ErrnoException {
+  const error = new Error(code) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
 }
