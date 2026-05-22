@@ -33,6 +33,30 @@ describe("ConnectorRuntime", () => {
     expect(() => new ConnectorRuntime({ env: validEnv({ DB_PASSWORD: "" }) })).toThrow(ConfigValidationError);
   });
 
+  it("can start in setup-waiting mode when database variables are absent", async () => {
+    const transport = new FakeTransport();
+    const runtime = new ConnectorRuntime({
+      env: validEnv({
+        DB_DRIVER: undefined,
+        DB_HOST: undefined,
+        DB_PORT: undefined,
+        DB_NAME: undefined,
+        DB_USER: undefined,
+        DB_PASSWORD: undefined
+      }),
+      allowMissingDatabaseConfig: true,
+      logger: silentLogger(),
+      transport,
+      stateStore: new StateStore({ stateFilePath: join(tmpdir(), `runtime-${randomUUID()}.json`) })
+    });
+
+    await runtime.start();
+
+    expect(transport.connect).toHaveBeenCalledOnce();
+    expect(runtime.getState().pollingPaused).toBe(true);
+    expect(runtime.getState().config.database).toBeUndefined();
+  });
+
   it("closes transport when runtime startup fails", async () => {
     const transport = new FakeTransport();
     transport.connect.mockRejectedValueOnce(new Error("connect failed"));
@@ -744,6 +768,49 @@ describe("ConnectorRuntime", () => {
     await waitUntil(() => transport.sentSchemaResults.length === 1);
     expect(secondAdapter.listTables).toHaveBeenCalled();
     expect(firstAdapter.listTables).not.toHaveBeenCalled();
+
+    createAdapterSpy.mockRestore();
+  });
+
+  it("loads first database adapter from setup when service started without DB env", async () => {
+    const transport = new FakeTransport();
+    const setupAdapter = adapterWithTables([{ name: "panel_products" }]);
+    const createAdapterSpy = vi
+      .spyOn(adapterFactory, "createSourceDatabaseAdapter")
+      .mockReturnValue(setupAdapter);
+    const runtime = new ConnectorRuntime({
+      env: validEnv({
+        DB_DRIVER: undefined,
+        DB_HOST: undefined,
+        DB_PORT: undefined,
+        DB_NAME: undefined,
+        DB_USER: undefined,
+        DB_PASSWORD: undefined
+      }),
+      allowMissingDatabaseConfig: true,
+      logger: silentLogger(),
+      transport,
+      stateStore: new StateStore({ stateFilePath: join(tmpdir(), `runtime-${randomUUID()}.json`) })
+    });
+
+    await runtime.start();
+    transport.emitSetupConfig(manualSetupCommand());
+    await waitUntil(() => transport.sentSetupConfigResults.length === 1);
+
+    expect(transport.sentSetupConfigResults[0]).toMatchObject({
+      type: CONNECTOR_SETUP_CONFIG_RESULT_TYPE,
+      ok: true
+    });
+    expect(createAdapterSpy).toHaveBeenCalledOnce();
+    expect(setupAdapter.connect).toHaveBeenCalledOnce();
+    expect(runtime.getState().config.database?.driver).toBe("mysql");
+
+    transport.emitSchemaDiscoveryRequest({
+      responseFormat: "legacy",
+      correlationId: "schema-after-first-setup"
+    });
+    await waitUntil(() => transport.sentSchemaResults.length === 1);
+    expect(setupAdapter.listTables).toHaveBeenCalled();
 
     createAdapterSpy.mockRestore();
   });

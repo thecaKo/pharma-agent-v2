@@ -1,4 +1,4 @@
-import type { ConfigValidationIssue, ConnectorConfig, DatabaseDriver, LogLevel } from "./types.js";
+import type { ConfigValidationIssue, ConnectorConfig, DatabaseConfig, DatabaseDriver, LogLevel } from "./types.js";
 
 export const REQUIRED_ENV = [
   "CONNECTOR_TOKEN",
@@ -12,6 +12,22 @@ export const REQUIRED_ENV = [
 ] as const;
 
 export const CONNECTOR_ENV_KEYS = [...REQUIRED_ENV, "LOG_LEVEL"] as const;
+export const REQUIRED_DATABASE_ENV = [
+  "DB_DRIVER",
+  "DB_HOST",
+  "DB_PORT",
+  "DB_NAME",
+  "DB_USER",
+  "DB_PASSWORD"
+] as const;
+
+export interface ConnectorStartupConfig extends Omit<ConnectorConfig, "database"> {
+  database?: DatabaseConfig;
+}
+
+export interface LoadConfigOptions {
+  requireDatabase?: boolean;
+}
 
 const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird"]);
 const LOG_LEVELS = new Set<LogLevel>(["debug", "info", "warn", "error"]);
@@ -28,12 +44,45 @@ export class ConfigValidationError extends Error {
 
 export type Environment = Record<string, string | undefined>;
 
-export function loadConfig(env: Environment = process.env): ConnectorConfig {
+export function loadConfig(env?: Environment): ConnectorConfig;
+export function loadConfig(env: Environment | undefined, options: { requireDatabase: false }): ConnectorStartupConfig;
+export function loadConfig(
+  env: Environment = process.env,
+  options: LoadConfigOptions = {}
+): ConnectorConfig | ConnectorStartupConfig {
+  const requireDatabase = options.requireDatabase ?? true;
   const issues: ConfigValidationIssue[] = [];
 
   for (const field of REQUIRED_ENV) {
+    if (!requireDatabase && isDatabaseField(field)) {
+      continue;
+    }
     if (!readRequired(env, field)) {
       issues.push({ field, message: "is required" });
+    }
+  }
+
+  const hasDatabaseConfig = REQUIRED_DATABASE_ENV.some((field) => readRequired(env, field));
+  if (!requireDatabase && !hasDatabaseConfig) {
+    const logLevel = normalizeOptional(env.LOG_LEVEL, "info");
+    if (!LOG_LEVELS.has(logLevel as LogLevel)) {
+      issues.push({ field: "LOG_LEVEL", message: "must be debug, info, warn, or error" });
+    }
+    if (issues.length > 0) {
+      throw new ConfigValidationError(issues);
+    }
+    return {
+      connectorToken: readRequired(env, "CONNECTOR_TOKEN"),
+      websocketUrl: readRequired(env, "CONNECTOR_WS_URL"),
+      logLevel: logLevel as LogLevel
+    };
+  }
+
+  if (!requireDatabase) {
+    for (const field of REQUIRED_DATABASE_ENV) {
+      if (!readRequired(env, field)) {
+        issues.push({ field, message: "is required" });
+      }
     }
   }
 
@@ -78,6 +127,10 @@ export function configSecrets(config: Pick<ConnectorConfig, "connectorToken" | "
 
 function readRequired(env: Environment, field: (typeof REQUIRED_ENV)[number]): string {
   return normalizeOptional(env[field], "");
+}
+
+function isDatabaseField(field: (typeof REQUIRED_ENV)[number]): field is (typeof REQUIRED_DATABASE_ENV)[number] {
+  return (REQUIRED_DATABASE_ENV as readonly string[]).includes(field);
 }
 
 function normalizeOptional(value: string | undefined, fallback: string): string {

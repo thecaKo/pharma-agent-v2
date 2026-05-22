@@ -2,6 +2,9 @@
 
 The Windows Service merges configuration from multiple sources at startup.
 Restart the service after any central or database configuration change.
+When the installer has written central settings but database settings are not
+available yet, the service starts in a setup-waiting state and does not begin
+schema discovery or product polling until database onboarding completes.
 
 ## Installer-Managed Central Settings
 

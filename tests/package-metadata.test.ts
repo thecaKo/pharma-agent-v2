@@ -315,8 +315,8 @@ describe("windows installer manual verification documentation", () => {
 
     expect(manual).toContain("### Incomplete Database Onboarding and Service Start");
     expect(manual).toMatch(/before `npm run database-setup --`/i);
-    expect(manual).toContain("CONFIG_VALIDATION_FAILED");
-    expect(manual).toContain("DB_DRIVER");
+    expect(manual).toContain("databaseConfigured=false");
+    expect(manual).toMatch(/remains `Running`/i);
     expect(manual).toMatch(/installer success separately from production readiness/i);
   });
 

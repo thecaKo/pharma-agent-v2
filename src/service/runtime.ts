@@ -1,6 +1,6 @@
 import path from "node:path";
 import { homedir } from "node:os";
-import { configSecrets, loadConfig, type Environment } from "../config/env.js";
+import { configSecrets, loadConfig, type ConnectorStartupConfig, type Environment } from "../config/env.js";
 import type { ConnectorConfig, DatabaseConfig } from "../config/types.js";
 import {
   createSourceDatabaseAdapter,
@@ -86,6 +86,7 @@ export interface RuntimeTimers {
 
 export interface ConnectorRuntimeOptions {
   env?: Environment;
+  allowMissingDatabaseConfig?: boolean;
   logger?: Logger;
   stateStore?: StateStore;
   stateFilePath?: string;
@@ -97,11 +98,20 @@ export interface ConnectorRuntimeOptions {
 }
 
 export interface ConnectorRuntimeState {
-  config: ConnectorConfig;
+  config: ConnectorRuntimeConfig;
   activeMapping?: ValidatedMappingConfig;
   inFlightBatch?: ProductChangeBatch;
   pollingPaused: boolean;
   stopped: boolean;
+}
+
+type ConnectorRuntimeConfig = ConnectorConfig | ConnectorStartupConfig;
+
+class DatabaseConfigurationUnavailableError extends Error {
+  public constructor() {
+    super("Database configuration is not available yet. Complete database setup before activating mapping or schema discovery.");
+    this.name = "DatabaseConfigurationUnavailableError";
+  }
 }
 
 const defaultTimers: RuntimeTimers = {
@@ -110,10 +120,10 @@ const defaultTimers: RuntimeTimers = {
 };
 
 export class ConnectorRuntime {
-  private readonly config: ConnectorConfig;
+  private config: ConnectorRuntimeConfig;
   private readonly logger: Logger;
   private readonly stateStore: StateStore;
-  private adapter: SourceDatabaseAdapter;
+  private adapter?: SourceDatabaseAdapter;
   private readonly adapterDependencies: AdapterFactoryDependencies;
   private readonly transport: RuntimeTransport;
   private readonly timers: RuntimeTimers;
@@ -132,12 +142,14 @@ export class ConnectorRuntime {
   private lastErrorCode: string | undefined;
 
   public constructor(options: ConnectorRuntimeOptions = {}) {
-    this.config = loadConfig(options.env);
+    this.config = options.allowMissingDatabaseConfig
+      ? loadConfig(options.env, { requireDatabase: false })
+      : loadConfig(options.env);
     this.logger =
       options.logger ??
       createLogger({
         level: this.config.logLevel,
-        secrets: configSecrets(this.config),
+        secrets: runtimeConfigSecrets(this.config),
         nodeEnv: options.env?.NODE_ENV ?? options.env?.node_env
       });
     this.stateStore =
@@ -146,13 +158,14 @@ export class ConnectorRuntime {
         stateFilePath: options.stateFilePath ?? defaultStateFilePath()
       });
     this.adapterDependencies = options.adapterDependencies ?? createOptionalDriverDependencies();
-    this.adapter =
-      options.adapter ??
-      createSourceDatabaseAdapter({
+    this.adapter = options.adapter;
+    if (!this.adapter && this.config.database) {
+      this.adapter = createSourceDatabaseAdapter({
         config: this.config.database,
         dependencies: this.adapterDependencies,
-        secrets: configSecrets(this.config)
+        secrets: runtimeConfigSecrets(this.config)
       });
+    }
     this.transport =
       options.transport ??
       new WebSocketTransportClient({
@@ -169,15 +182,22 @@ export class ConnectorRuntime {
     this.stopped = false;
     this.logger.info("service.startup", {
       version: CONNECTOR_VERSION,
-      dbDriver: this.config.database.driver
+      dbDriver: this.config.database?.driver,
+      databaseConfigured: this.config.database !== undefined
     });
+    const databaseConfig = this.config.database;
     this.logger.info("configuration.loaded", {
       websocketUrl: this.config.websocketUrl,
-      dbDriver: this.config.database.driver,
-      dbHost: this.config.database.host,
-      dbPort: this.config.database.port,
-      dbName: this.config.database.name,
-      dbUser: this.config.database.user
+      databaseConfigured: databaseConfig !== undefined,
+      ...(databaseConfig
+        ? {
+            dbDriver: databaseConfig.driver,
+            dbHost: databaseConfig.host,
+            dbPort: databaseConfig.port,
+            dbName: databaseConfig.name,
+            dbUser: databaseConfig.user
+          }
+        : {})
     });
 
     await this.transport.connect();
@@ -192,7 +212,7 @@ export class ConnectorRuntime {
     await this.pendingPoll?.catch(() => undefined);
     await this.pendingStateWrite;
     await this.transport.close();
-    if (this.adapterConnected) {
+    if (this.adapterConnected && this.adapter) {
       await this.adapter.close();
       this.adapterConnected = false;
     }
@@ -296,7 +316,7 @@ export class ConnectorRuntime {
     reason?: string;
   }): Promise<void> {
     const { connectorId, customerId, mapping } = input;
-    await this.ensureAdapterConnected();
+    const adapter = await this.ensureAdapterConnected();
 
     const previous = input.previousState ?? (await this.stateStore.load());
     const keepCursor = canReuseAcknowledgedCursor(previous, mapping);
@@ -320,7 +340,7 @@ export class ConnectorRuntime {
     this.activeCustomerId = customerId;
     this.inFlightBatch = undefined;
     this.poller = new IncrementalPoller({
-      adapter: this.adapter,
+      adapter,
       mapping,
       state: this.stateStore,
       connectorId,
@@ -404,7 +424,7 @@ export class ConnectorRuntime {
           command,
           errorCode: errorInput.errorCode,
           message: errorInput.message,
-          secrets: configSecrets(this.config)
+          secrets: runtimeConfigSecrets(this.config)
         },
         this.now()
       );
@@ -447,7 +467,7 @@ export class ConnectorRuntime {
     }
 
     const secrets = configSecrets({
-      ...this.config,
+      connectorToken: this.config.connectorToken,
       database: databaseConfig
     });
     const candidateAdapter = createSourceDatabaseAdapter({
@@ -480,13 +500,17 @@ export class ConnectorRuntime {
     }
 
     const previousAdapter = this.adapter;
+    this.config = {
+      ...this.config,
+      database: databaseConfig
+    };
     this.adapter = candidateAdapter;
     this.adapterConnected = true;
-    await previousAdapter.close().catch(() => undefined);
+    await previousAdapter?.close().catch(() => undefined);
 
     if (this.activeMapping && this.poller) {
       this.poller = new IncrementalPoller({
-        adapter: this.adapter,
+        adapter: candidateAdapter,
         mapping: this.activeMapping,
         state: this.stateStore,
         connectorId: this.activeConnectorId ?? this.inFlightBatch?.connectorId ?? "",
@@ -535,8 +559,8 @@ export class ConnectorRuntime {
   }
 
   private async discoverSchemaSnapshot(): Promise<SchemaDiscoveryTable[]> {
-    await this.ensureAdapterConnected();
-    const tables = await this.adapter.listTables();
+    const adapter = await this.ensureAdapterConnected();
+    const tables = await adapter.listTables();
     const limitedTables =
       tables.length > SCHEMA_DISCOVERY_MAX_TABLE_COUNT ? tables.slice(0, SCHEMA_DISCOVERY_MAX_TABLE_COUNT) : tables;
 
@@ -550,7 +574,7 @@ export class ConnectorRuntime {
 
     const snapshot: SchemaDiscoveryTable[] = [];
     for (const table of limitedTables) {
-      const columns = await this.adapter.listColumns(table.name);
+      const columns = await adapter.listColumns(table.name);
       snapshot.push({
         name: table.name,
         columns: normalizeSchemaDiscoveryColumns(columns)
@@ -678,13 +702,19 @@ export class ConnectorRuntime {
     await this.pendingStateWrite;
   }
 
-  private async ensureAdapterConnected(): Promise<void> {
-    if (this.adapterConnected) {
-      return;
+  private async ensureAdapterConnected(): Promise<SourceDatabaseAdapter> {
+    const adapter = this.adapter;
+    if (!adapter) {
+      throw new DatabaseConfigurationUnavailableError();
     }
 
-    await this.adapter.connect();
+    if (this.adapterConnected) {
+      return adapter;
+    }
+
+    await adapter.connect();
     this.adapterConnected = true;
+    return adapter;
   }
 
   private sendHeartbeat(lastSuccessfulSendAt?: string): void {
@@ -777,6 +807,12 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
       );
     }
   };
+}
+
+function runtimeConfigSecrets(config: ConnectorRuntimeConfig): string[] {
+  return [config.connectorToken, config.database?.password].filter(
+    (value): value is string => typeof value === "string" && value.length > 0
+  );
 }
 
 async function optionalImport(specifier: string): Promise<any> {

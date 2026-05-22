@@ -10,9 +10,11 @@ import { runMain, runServiceMain, validateStartup } from "../src/main.js";
 import { validDatabaseEnv, validEnv } from "./helpers/env.js";
 
 vi.mock("../src/service/runtime.js", () => ({
-  startConnectorRuntime: vi.fn(async (options: { env?: NodeJS.ProcessEnv }) => {
+  startConnectorRuntime: vi.fn(async (options: { env?: NodeJS.ProcessEnv; allowMissingDatabaseConfig?: boolean }) => {
     const { loadConfig } = await import("../src/config/env.js");
-    loadConfig(options?.env);
+    loadConfig(options?.env, {
+      requireDatabase: !options?.allowMissingDatabaseConfig
+    });
     return {};
   })
 }));
@@ -111,6 +113,28 @@ describe("startup entrypoint", () => {
     }
   });
 
+  it("keeps service startup alive when database configuration has not been created yet", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      expect(
+        await runServiceMain(
+          validDevEnv({
+            DB_DRIVER: undefined,
+            DB_HOST: undefined,
+            DB_PORT: undefined,
+            DB_NAME: undefined,
+            DB_USER: undefined,
+            DB_PASSWORD: undefined
+          }) as NodeJS.ProcessEnv
+        )
+      ).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("returns non-zero when service startup ProgramData config is invalid", async () => {
     const configFilePath = await writeInvalidInstallerConfig();
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -130,7 +154,8 @@ describe("startup entrypoint", () => {
       expect.objectContaining({
         env: expect.objectContaining({
           CONNECTOR_TOKEN: "test-connector-token"
-        })
+        }),
+        allowMissingDatabaseConfig: true
       })
     );
   });

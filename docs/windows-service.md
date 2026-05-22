@@ -32,6 +32,8 @@ decommissioning the connector on that host.
 The installer does not configure the pharmacy database. After install, follow
 `docs/configuration.md` (**After Windows Installer Completion**) and run
 `npm run database-setup --` before expecting production synchronization.
+Before that database onboarding exists, the service should remain running in a
+setup-waiting state rather than stopping because `DB_*` variables are missing.
 
 ## PowerShell Script Fallback (Administrative)
 

@@ -53,7 +53,7 @@ Run this after a successful installer-only install, before `npm run database-set
 
 1. Confirm machine environment variables do not yet include `DB_DRIVER`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, or `DB_PASSWORD` (unless intentionally pre-seeded for a negative test).
 2. Run `Start-Service -Name PharmaAgentConnector`.
-3. Confirm the Windows Service is registered but the connector process does not reach a healthy production runtime: startup validation fails for missing database configuration (`CONFIG_VALIDATION_FAILED` / `DB_DRIVER` in service logs).
+3. Confirm the Windows Service remains `Running` and logs `databaseConfigured=false` while waiting for database onboarding.
 4. Confirm service stdout/stderr logs and Event Viewer entries do not contain `CONNECTOR_TOKEN` or `DB_PASSWORD`.
 5. Complete `npm run database-setup --` per **Database Setup CLI Flow**, restart the service, and confirm startup validation succeeds before heartbeat or product synchronization checks.
 

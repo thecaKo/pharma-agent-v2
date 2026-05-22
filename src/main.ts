@@ -78,7 +78,10 @@ export async function runServiceMain(
 ): Promise<number> {
   try {
     const startupEnv = await resolveStartupEnvironment(env, options);
-    const runtime = await startConnectorRuntime({ env: startupEnv.env });
+    const runtime = await startConnectorRuntime({
+      env: startupEnv.env,
+      allowMissingDatabaseConfig: true
+    });
     registerShutdownHandlers(runtime);
     return 0;
   } catch (error) {
