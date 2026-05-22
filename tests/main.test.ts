@@ -6,7 +6,7 @@ import {
   CONNECTOR_CONFIG_FILE_NAME,
   INSTALLER_CONFIG_DIR_NAME
 } from "../src/config/programdata-config.js";
-import { runMain, runServiceMain, validateStartup } from "../src/main.js";
+import { runMain, runServiceMain, validateStartup, waitForServiceShutdown } from "../src/main.js";
 import { validDatabaseEnv, validEnv } from "./helpers/env.js";
 
 vi.mock("../src/service/runtime.js", () => ({
@@ -15,7 +15,10 @@ vi.mock("../src/service/runtime.js", () => ({
     loadConfig(options?.env, {
       requireDatabase: !options?.allowMissingDatabaseConfig
     });
-    return {};
+    return {
+      getState: () => ({ stopped: false }),
+      shutdown: vi.fn(async () => undefined)
+    };
   })
 }));
 
@@ -24,6 +27,7 @@ vi.mock("../src/service/shutdown.js", () => ({
 }));
 
 const tempDirs: string[] = [];
+const serviceMainOptions = { keepProcessAlive: false as const };
 
 describe("startup entrypoint", () => {
   afterEach(async () => {
@@ -38,10 +42,12 @@ describe("startup entrypoint", () => {
       await validateStartup(validDevEnv() as NodeJS.ProcessEnv);
 
       expect(error).not.toHaveBeenCalled();
-      expect(log).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenCalledTimes(3);
       const output = log.mock.calls.map((call) => call[0]).join("\n");
       expect(output).toContain('"event":"service.startup"');
       expect(output).toContain('"event":"configuration.loaded"');
+      expect(output).toContain('"event":"diagnostics.startup_report"');
+      expect(output).toContain('"databaseConfigured":true');
       expect(output).not.toContain("test-connector-token");
       expect(output).not.toContain("test-db-password");
     } finally {
@@ -103,7 +109,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runServiceMain(validDevEnv({ DB_PASSWORD: "" }) as NodeJS.ProcessEnv)).toBe(1);
+      expect(await runServiceMain(validDevEnv({ DB_PASSWORD: "" }) as NodeJS.ProcessEnv, serviceMainOptions)).toBe(1);
       expect(error).toHaveBeenCalledOnce();
       const output = error.mock.calls[0]?.[0] as string;
       expect(output).toContain('"event":"unrecoverable.configuration_error"');
@@ -126,7 +132,8 @@ describe("startup entrypoint", () => {
             DB_NAME: undefined,
             DB_USER: undefined,
             DB_PASSWORD: undefined
-          }) as NodeJS.ProcessEnv
+          }) as NodeJS.ProcessEnv,
+          serviceMainOptions
         )
       ).toBe(0);
       expect(error).not.toHaveBeenCalled();
@@ -140,7 +147,7 @@ describe("startup entrypoint", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      expect(await runServiceMain(validDevDatabaseEnv() as NodeJS.ProcessEnv, { configFilePath })).toBe(1);
+      expect(await runServiceMain(validDevDatabaseEnv() as NodeJS.ProcessEnv, { ...serviceMainOptions, configFilePath })).toBe(1);
     } finally {
       error.mockRestore();
     }
@@ -149,7 +156,7 @@ describe("startup entrypoint", () => {
   it("starts service runtime with merged startup environment", async () => {
     const { startConnectorRuntime } = await import("../src/service/runtime.js");
 
-    expect(await runServiceMain(validDevEnv() as NodeJS.ProcessEnv)).toBe(0);
+    expect(await runServiceMain(validDevEnv() as NodeJS.ProcessEnv, serviceMainOptions)).toBe(0);
     expect(startConnectorRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         env: expect.objectContaining({
@@ -158,6 +165,20 @@ describe("startup entrypoint", () => {
         allowMissingDatabaseConfig: true
       })
     );
+  });
+
+  it("waits for runtime shutdown when keepProcessAlive is enabled", async () => {
+    let stopped = false;
+    const runtime = {
+      getState: () => ({ stopped })
+    };
+
+    const waitPromise = waitForServiceShutdown(runtime, 10, async (ms) => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      stopped = true;
+    });
+
+    await expect(waitPromise).resolves.toBeUndefined();
   });
 
   it("does not expose file-backed connector token or database password in validation errors", async () => {
@@ -200,6 +221,7 @@ describe("startup entrypoint", () => {
 
       const output = log.mock.calls.map((call) => call[0]).join("\n");
       expect(output).toContain('"authCredentialSource":"programdata"');
+      expect(output).toContain('"event":"diagnostics.startup_report"');
       expect(output).not.toContain("installer-managed-secret-token");
       expect(error).not.toHaveBeenCalled();
     } finally {

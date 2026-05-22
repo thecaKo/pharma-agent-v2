@@ -262,6 +262,9 @@ describe("windows installer documentation integration", () => {
 
     expect(docs).toContain("Installer-First Installation");
     expect(docs).toContain("PharmaAgentConnector.msi");
+    expect(docs).toContain("PharmaAgentConnector.Service.exe");
+    expect(docs).toContain("node_modules");
+    expect(docs).toContain("package-lock.json");
     expect(docs).toMatch(/administrator privileges/i);
     expect(docs).toContain("Repair");
     expect(docs).toContain("Uninstall");
@@ -283,6 +286,8 @@ describe("windows installer documentation integration", () => {
     expect(docs).toContain("PharmaAgentConnector");
     expect(docs).toContain("dist\\main.js");
     expect(docs).toContain("automatic");
+    expect(docs).toContain("WINSW_EXE_PATH");
+    expect(docs).toContain("%PROGRAMDATA%\\PharmaAgentConnector\\logs");
   });
 });
 
@@ -296,6 +301,8 @@ describe("windows installer manual verification documentation", () => {
 
     expect(manual).toContain("npm run package:windows-installer");
     expect(manual).toContain("PharmaAgentConnector.msi");
+    expect(manual).toContain("PharmaAgentConnector.Service.exe");
+    expect(manual).toContain("node_modules");
     expect(manual).toMatch(/Windows-gated|administrator privileges/i);
     expect(manual).toContain("Automated Checks (Non-Windows and CI)");
   });

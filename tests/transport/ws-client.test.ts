@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../../src/logging/logger.js";
 import { buildProductBatch } from "../../src/poller/batch-builder.js";
@@ -12,7 +13,7 @@ import {
   SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE
 } from "../../src/transport/connector-setup-ws.js";
 import { CATALOG_MAPPING_PREVIEW_RESULT_TYPE } from "../../src/transport/mapping-preview.js";
-import { WebSocketTransportClient } from "../../src/transport/ws-client.js";
+import { WebSocketTransportClient, type WebSocketLike } from "../../src/transport/ws-client.js";
 import { validMapping } from "../helpers/mapping.js";
 import { MockWebSocketServer, waitFor } from "../support/mock-ws-server.js";
 
@@ -603,6 +604,37 @@ describe("WebSocketTransportClient", () => {
     });
   });
 
+  it("keeps the process alive by scheduling reconnect when the initial handshake closes", async () => {
+    const socket = new EarlyCloseWebSocket();
+    let connectionAttempts = 0;
+    client = new WebSocketTransportClient({
+      url: "ws://mock.connector.test/forbidden",
+      connectorToken: "connector-token-secret",
+      retryPolicy: { baseDelayMs: 10_000, maxDelayMs: 10_000, jitterRatio: 0, random: () => 0.5 },
+      socketFactory: () => {
+        connectionAttempts += 1;
+        queueMicrotask(() => socket.serverClose(1008, "forbidden"));
+        return socket;
+      },
+      logger: createLogger({
+        level: "debug",
+        secrets: ["connector-token-secret"],
+        nodeEnv: "dev",
+        output: {
+          log: (message) => logs.push(String(message)),
+          error: (message) => logs.push(String(message))
+        }
+      })
+    });
+
+    await expect(client.connect()).resolves.toBeUndefined();
+
+    expect(connectionAttempts).toBe(1);
+    expect(client.getReconnectAttemptCount()).toBe(1);
+    expect(logs.join("\n")).toContain("websocket reconnect scheduled");
+    expect(logs.join("\n")).not.toContain("connector-token-secret");
+  });
+
   it("sends connector.error messages without secret metadata", async () => {
     client = createClient();
     await client.connect();
@@ -721,6 +753,28 @@ describe("WebSocketTransportClient", () => {
     });
   }
 });
+
+class EarlyCloseWebSocket extends EventEmitter implements WebSocketLike {
+  public readonly OPEN = 1;
+  public readonly CLOSED = 3;
+  public readyState = 0;
+
+  public send(): void {
+    throw new Error("Socket is not open");
+  }
+
+  public close(): void {
+    this.serverClose(1000, "client close");
+  }
+
+  public serverClose(code: number, reason: string): void {
+    if (this.readyState === this.CLOSED) {
+      return;
+    }
+    this.readyState = this.CLOSED;
+    this.emit("close", code, Buffer.from(reason, "utf8"));
+  }
+}
 
 function fixtureBatch() {
   return buildProductBatch({

@@ -287,7 +287,9 @@ export class WebSocketTransportClient extends EventEmitter {
         });
         if (!settled) {
           settled = true;
-          reject(error);
+          this.socket = undefined;
+          this.scheduleReconnect();
+          resolve();
         }
       });
 
@@ -298,7 +300,9 @@ export class WebSocketTransportClient extends EventEmitter {
         this.emit("disconnected", closeInfo);
         if (!settled) {
           settled = true;
-          reject(new Error(`WebSocket closed before opening: ${code}`));
+          this.socket = undefined;
+          this.scheduleReconnect();
+          resolve();
         }
         if (opened && !this.stopped && this.socket === socket) {
           this.scheduleReconnect();

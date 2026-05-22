@@ -11,20 +11,26 @@ async function readScriptDefaults(): Promise<{
   serviceName: string;
   displayName: string;
   entrypoint: string;
+  wrapperExecutable: string;
+  wrapperConfigurationFile: string;
 }> {
   const script = await readFile(join(projectRoot, "scripts", "install-service.ps1"), "utf8");
   const serviceName = script.match(/\$ServiceName = "([^"]+)"/u)?.[1];
   const displayName = script.match(/\$DisplayName = "([^"]+)"/u)?.[1];
   const entrypoint = script.match(/Join-Path \$InstallDirectory "([^"]+)"/u)?.[1];
+  const wrapperExecutable = script.match(/\$serviceExecutableName = "([^"]+)"/u)?.[1];
+  const wrapperConfigurationFile = script.match(/\$serviceConfigurationName = "([^"]+)"/u)?.[1];
 
-  if (!serviceName || !displayName || !entrypoint) {
+  if (!serviceName || !displayName || !entrypoint || !wrapperExecutable || !wrapperConfigurationFile) {
     throw new Error("Could not parse install-service.ps1 defaults.");
   }
 
   return {
     serviceName,
     displayName,
-    entrypoint: entrypoint.replace(/\\/gu, "/")
+    entrypoint: entrypoint.replace(/\\/gu, "/"),
+    wrapperExecutable,
+    wrapperConfigurationFile
   };
 }
 
@@ -46,10 +52,15 @@ describe("installer metadata integration", () => {
     expect(metadata.serviceName).toBe(scriptDefaults.serviceName);
     expect(metadata.displayName).toBe(scriptDefaults.displayName);
     expect(metadata.entrypointRelativePath).toBe(scriptDefaults.entrypoint);
+    expect(metadata.serviceWrapperExecutable).toBe(scriptDefaults.wrapperExecutable);
+    expect(metadata.serviceWrapperConfigurationFile).toBe(scriptDefaults.wrapperConfigurationFile);
     expect(combinedSource).toContain(metadata.serviceName);
     expect(combinedSource).toContain(metadata.displayName);
     expect(combinedSource).toContain(metadata.entrypointWindowsRelativePath);
+    expect(combinedSource).toContain(metadata.serviceWrapperExecutable);
+    expect(combinedSource).toContain(metadata.serviceWrapperConfigurationFile);
     expect(combinedSource).toContain('Start="auto"');
+    expect(combinedSource).not.toContain('Arguments="&quot;[INSTALLFOLDER]');
   });
 
   it("packages the connector as a standalone MSI project", async () => {
@@ -57,6 +68,7 @@ describe("installer metadata integration", () => {
 
     expect(packageProject).toContain("<OutputType>Package</OutputType>");
     expect(packageProject).toContain("PharmaAgentConnector");
+    expect(packageProject).toContain("GeneratedNodeModulesFiles.wxs");
   });
 });
 

@@ -10,6 +10,7 @@ import { attachFirebirdConnection } from "../db/firebird-driver.js";
 import type { SourceDatabaseAdapter } from "../db/source-adapter.js";
 import { createLogger, type Logger } from "../logging/logger.js";
 import { redactString } from "../logging/redact.js";
+import { collectStartupDiagnostics, defaultServiceLogPath } from "../logging/startup-diagnostics.js";
 import type { ValidatedMappingConfig } from "../mapping/types.js";
 import { validateMappingConfig } from "../mapping/validate.js";
 import { IncrementalPoller } from "../poller/incremental-poller.js";
@@ -90,6 +91,7 @@ export interface ConnectorRuntimeOptions {
   logger?: Logger;
   stateStore?: StateStore;
   stateFilePath?: string;
+  startupMetadata?: Record<string, string | boolean | undefined>;
   adapter?: SourceDatabaseAdapter;
   adapterDependencies?: AdapterFactoryDependencies;
   transport?: RuntimeTransport;
@@ -121,8 +123,11 @@ const defaultTimers: RuntimeTimers = {
 
 export class ConnectorRuntime {
   private config: ConnectorRuntimeConfig;
+  private readonly env?: Environment;
   private readonly logger: Logger;
   private readonly stateStore: StateStore;
+  private readonly stateFilePath: string;
+  private readonly startupMetadata?: Record<string, string | boolean | undefined>;
   private adapter?: SourceDatabaseAdapter;
   private readonly adapterDependencies: AdapterFactoryDependencies;
   private readonly transport: RuntimeTransport;
@@ -142,9 +147,12 @@ export class ConnectorRuntime {
   private lastErrorCode: string | undefined;
 
   public constructor(options: ConnectorRuntimeOptions = {}) {
+    this.env = options.env;
     this.config = options.allowMissingDatabaseConfig
       ? loadConfig(options.env, { requireDatabase: false })
       : loadConfig(options.env);
+    this.stateFilePath = options.stateFilePath ?? defaultStateFilePath(options.env?.PROGRAMDATA);
+    this.startupMetadata = options.startupMetadata;
     this.logger =
       options.logger ??
       createLogger({
@@ -155,7 +163,7 @@ export class ConnectorRuntime {
     this.stateStore =
       options.stateStore ??
       new StateStore({
-        stateFilePath: options.stateFilePath ?? defaultStateFilePath()
+        stateFilePath: this.stateFilePath
       });
     this.adapterDependencies = options.adapterDependencies ?? createOptionalDriverDependencies();
     this.adapter = options.adapter;
@@ -183,11 +191,14 @@ export class ConnectorRuntime {
     this.logger.info("service.startup", {
       version: CONNECTOR_VERSION,
       dbDriver: this.config.database?.driver,
-      databaseConfigured: this.config.database !== undefined
+      databaseConfigured: this.config.database !== undefined,
+      stateFilePath: this.stateFilePath,
+      logPath: defaultServiceLogPath(this.configuredProgramDataPath())
     });
     const databaseConfig = this.config.database;
     this.logger.info("configuration.loaded", {
       websocketUrl: this.config.websocketUrl,
+      websocketUrlConfigured: this.config.websocketUrl.trim().length > 0,
       databaseConfigured: databaseConfig !== undefined,
       ...(databaseConfig
         ? {
@@ -199,6 +210,30 @@ export class ConnectorRuntime {
           }
         : {})
     });
+    if (!databaseConfig) {
+      this.logger.warn("service.setup_waiting", {
+        databaseConfigured: false,
+        stateFilePath: this.stateFilePath,
+        logPath: defaultServiceLogPath(this.configuredProgramDataPath())
+      });
+    }
+    const diagnostics = await collectStartupDiagnostics({
+      baseDir: process.cwd(),
+      programData: this.configuredProgramDataPath(),
+      stateFilePath: this.stateFilePath,
+      databaseConfigured: databaseConfig !== undefined,
+      websocketUrlConfigured: this.config.websocketUrl.trim().length > 0,
+      dbDriver: databaseConfig?.driver,
+      startupMetadata: this.startupMetadata
+    });
+    for (const warning of diagnostics.warnings) {
+      this.logger.warn(warning.event, {
+        dependency: warning.dependency,
+        path: warning.path,
+        message: warning.message
+      });
+    }
+    this.logger.info("diagnostics.startup_report", { ...diagnostics.report });
 
     await this.transport.connect();
     await this.resumeSavedMappingIfAvailable();
@@ -451,12 +486,24 @@ export class ConnectorRuntime {
 
     this.pausePolling("database setup reload");
     await this.pendingPoll?.catch(() => undefined);
+    this.logger.info("setup.config.received", {
+      correlationId,
+      setupMethod: request.setupMethod,
+      driver: request.driver
+    });
 
     let databaseConfig: DatabaseConfig;
     try {
       databaseConfig = setupConfigToDatabaseConfig(request);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn("setup.config.validation_failed", {
+        correlationId,
+        setupMethod: request.setupMethod,
+        driver: request.driver,
+        errorCode: SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE,
+        message
+      });
       this.transport.sendConnectorSetupConfigResult(
         buildSetupConfigFailureResult(correlationId, {
           errorCode: SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE,
@@ -474,6 +521,15 @@ export class ConnectorRuntime {
       config: databaseConfig,
       dependencies: this.adapterDependencies,
       secrets
+    });
+    this.logger.info("setup.config.connection_test_started", {
+      correlationId,
+      setupMethod: request.setupMethod,
+      driver: request.driver,
+      dbHost: databaseConfig.host,
+      dbPort: databaseConfig.port,
+      dbName: databaseConfig.name,
+      dbUser: databaseConfig.user
     });
 
     try {
@@ -525,7 +581,7 @@ export class ConnectorRuntime {
     this.transport.sendConnectorSetupConfigResult(
       buildSetupConfigSuccessResult(correlationId, request)
     );
-    this.logger.info("setup.config.adapter_reloaded", {
+    this.logger.info("setup.config.applied", {
       correlationId,
       setupMethod: request.setupMethod,
       driver: request.driver,
@@ -705,6 +761,10 @@ export class ConnectorRuntime {
   private async ensureAdapterConnected(): Promise<SourceDatabaseAdapter> {
     const adapter = this.adapter;
     if (!adapter) {
+      this.logger.warn("database.config.missing", {
+        databaseConfigured: false,
+        stateFilePath: this.stateFilePath
+      });
       throw new DatabaseConfigurationUnavailableError();
     }
 
@@ -712,9 +772,25 @@ export class ConnectorRuntime {
       return adapter;
     }
 
-    await adapter.connect();
-    this.adapterConnected = true;
-    return adapter;
+    try {
+      await adapter.connect();
+      this.adapterConnected = true;
+      this.logger.info("database.connected", {
+        dbDriver: this.config.database?.driver,
+        dbHost: this.config.database?.host,
+        dbPort: this.config.database?.port,
+        dbName: this.config.database?.name,
+        dbUser: this.config.database?.user
+      });
+      return adapter;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn("database.connection_failed", {
+        dbDriver: this.config.database?.driver,
+        message
+      });
+      throw error;
+    }
   }
 
   private sendHeartbeat(lastSuccessfulSendAt?: string): void {
@@ -759,6 +835,11 @@ export class ConnectorRuntime {
       connectorId: this.inFlightBatch?.connectorId ?? this.activeConnectorId,
       customerId: this.inFlightBatch?.customerId ?? this.activeCustomerId
     };
+  }
+
+  private configuredProgramDataPath(): string | undefined {
+    const value = this.env?.PROGRAMDATA;
+    return value && value.trim().length > 0 ? value : undefined;
   }
 }
 

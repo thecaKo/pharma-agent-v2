@@ -12,6 +12,8 @@
 
     <Feature Id="ConnectorFeature" Title="Pharma Agent Connector" Level="1">
       <ComponentGroupRef Id="ConnectorApplicationFiles" />
+      <ComponentGroupRef Id="ConnectorDistFiles" />
+      <ComponentGroupRef Id="ConnectorNodeModulesFiles" />
       <ComponentGroupRef Id="ConnectorServiceComponents" />
       <ComponentRef Id="ProgramDataConnectorConfig" />
       <ComponentRef Id="ProgramDataConfigScript" />

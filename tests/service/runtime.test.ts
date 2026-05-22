@@ -35,6 +35,7 @@ describe("ConnectorRuntime", () => {
 
   it("can start in setup-waiting mode when database variables are absent", async () => {
     const transport = new FakeTransport();
+    const logger = silentLogger();
     const runtime = new ConnectorRuntime({
       env: validEnv({
         DB_DRIVER: undefined,
@@ -45,7 +46,7 @@ describe("ConnectorRuntime", () => {
         DB_PASSWORD: undefined
       }),
       allowMissingDatabaseConfig: true,
-      logger: silentLogger(),
+      logger,
       transport,
       stateStore: new StateStore({ stateFilePath: join(tmpdir(), `runtime-${randomUUID()}.json`) })
     });
@@ -55,6 +56,20 @@ describe("ConnectorRuntime", () => {
     expect(transport.connect).toHaveBeenCalledOnce();
     expect(runtime.getState().pollingPaused).toBe(true);
     expect(runtime.getState().config.database).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "service.setup_waiting",
+      expect.objectContaining({ databaseConfigured: false })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "diagnostics.startup_report",
+      expect.objectContaining({
+        serviceWrapper: "WinSW",
+        databaseConfigured: false,
+        websocketUrlConfigured: true,
+        stateFilePath: expect.any(String),
+        logPath: expect.any(String)
+      })
+    );
   });
 
   it("closes transport when runtime startup fails", async () => {
@@ -739,12 +754,14 @@ describe("ConnectorRuntime", () => {
     const transport = new FakeTransport();
     const firstAdapter = adapterWithTables([{ name: "legacy_products" }]);
     const secondAdapter = adapterWithTables([{ name: "panel_products" }]);
+    const logger = silentLogger();
     const createAdapterSpy = vi
       .spyOn(adapterFactory, "createSourceDatabaseAdapter")
       .mockReturnValue(secondAdapter);
     const runtime = createRuntime({
       transport,
-      adapter: firstAdapter
+      adapter: firstAdapter,
+      logger
     });
 
     await runtime.start();
@@ -760,6 +777,22 @@ describe("ConnectorRuntime", () => {
     expect(createAdapterSpy).toHaveBeenCalledOnce();
     expect(firstAdapter.close).toHaveBeenCalledOnce();
     expect(secondAdapter.connect).toHaveBeenCalledOnce();
+    expect(logger.info).toHaveBeenCalledWith(
+      "setup.config.connection_test_started",
+      expect.objectContaining({
+        correlationId: "setup-1",
+        setupMethod: "manual",
+        driver: "mysql"
+      })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "setup.config.applied",
+      expect.objectContaining({
+        correlationId: "setup-1",
+        setupMethod: "manual",
+        driver: "mysql"
+      })
+    );
 
     transport.emitSchemaDiscoveryRequest({
       responseFormat: "legacy",
@@ -818,6 +851,7 @@ describe("ConnectorRuntime", () => {
   it("keeps prior adapter when setup config connection fails", async () => {
     const transport = new FakeTransport();
     const adapter = adapterWithTables([{ name: "products" }]);
+    const logger = silentLogger();
     const failingAdapter = {
       connect: vi.fn(async () => {
         throw new Error("cannot reach test-db-password host");
@@ -832,7 +866,8 @@ describe("ConnectorRuntime", () => {
       .mockReturnValue(failingAdapter);
     const runtime = createRuntime({
       transport,
-      adapter
+      adapter,
+      logger
     });
 
     await runtime.start();
@@ -848,6 +883,14 @@ describe("ConnectorRuntime", () => {
       ok: false,
       errorCode: "SETUP_CONNECTION_FAILED"
     });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "setup.config.connection_failed",
+      expect.objectContaining({
+        correlationId: "setup-1",
+        driver: "mysql",
+        message: "cannot reach [REDACTED] host"
+      })
+    );
     expect(JSON.stringify(transport.sentSetupConfigResults)).not.toContain("test-db-password");
     expect(adapter.close).not.toHaveBeenCalled();
 
@@ -879,6 +922,26 @@ describe("ConnectorRuntime", () => {
     expect(runtime.getState().pollingPaused).toBe(false);
     expect(runtime.getState().activeMapping?.mappingVersion).toBe("mapping-v1");
     expect(timers.callbacks).toHaveLength(scheduledPolls);
+  });
+
+  it("logs database.connected after the adapter connects for discovery", async () => {
+    const transport = new FakeTransport();
+    const adapter = adapterWithTables([{ name: "products" }]);
+    const logger = silentLogger();
+    const runtime = createRuntime({ transport, adapter, logger });
+
+    await runtime.start();
+    transport.emitAdminRequest(adminRequest());
+    await waitUntil(() => transport.sentAdminResponses.length === 1);
+
+    expect(logger.info).toHaveBeenCalledWith(
+      "database.connected",
+      expect.objectContaining({
+        dbDriver: "mysql",
+        dbHost: "localhost",
+        dbPort: 3306
+      })
+    );
   });
 
   it("shutdown closes WebSocket and database adapter after state writes complete", async () => {

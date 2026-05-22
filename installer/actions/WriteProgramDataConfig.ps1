@@ -44,4 +44,6 @@ $config = [ordered]@{
   CONNECTOR_WS_URL = $wsUrl
 }
 
-$config | ConvertTo-Json -Compress | Set-Content -Path $configPath -Encoding UTF8
+$serializedConfig = $config | ConvertTo-Json -Compress
+$utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($configPath, $serializedConfig, $utf8WithoutBom)

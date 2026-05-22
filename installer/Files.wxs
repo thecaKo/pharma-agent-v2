@@ -2,11 +2,12 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <ComponentGroup Id="ConnectorApplicationFiles" Directory="INSTALLFOLDER">
-      <Component Id="ConnectorMainEntrypoint" Guid="D2E3F4A5-B6C7-4890-BCDE-F01234567890">
-        <File Id="ConnectorMainJs" Name="main.js" Source="$(StagingDir)\dist\main.js" KeyPath="yes" />
-      </Component>
       <Component Id="ConnectorPackageManifest" Guid="E3F4A5B6-C7D8-4901-CDEF-012345678901">
         <File Id="ConnectorPackageJson" Name="package.json" Source="$(StagingDir)\package.json" />
+        <File Id="ConnectorPackageLockJson" Name="package-lock.json" Source="$(StagingDir)\package-lock.json" />
+      </Component>
+      <Component Id="ConnectorNodeRuntime" Guid="F6A7B8C9-D0E1-4234-ABCD-567890123456">
+        <File Id="NodeExe" Name="node.exe" Source="$(StagingDir)\node.exe" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>

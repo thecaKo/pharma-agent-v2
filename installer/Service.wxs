@@ -5,7 +5,13 @@
   <Fragment>
     <ComponentGroup Id="ConnectorServiceComponents" Directory="INSTALLFOLDER">
       <Component Id="ConnectorWindowsService" Guid="C1D2E3F4-A5B6-4789-ABCD-EF0123456789">
-        <File Id="NodeExe" Name="node.exe" Source="$(StagingDir)\node.exe" KeyPath="yes" />
+        <File Id="ConnectorServiceWrapperExe"
+              Name="$(var.ServiceWrapperExecutable)"
+              Source="$(StagingDir)\$(var.ServiceWrapperExecutable)"
+              KeyPath="yes" />
+        <File Id="ConnectorServiceWrapperConfig"
+              Name="$(var.ServiceWrapperConfigFile)"
+              Source="$(StagingDir)\$(var.ServiceWrapperConfigFile)" />
         <ServiceInstall Id="ConnectorServiceInstall"
                         Name="$(var.ServiceName)"
                         DisplayName="$(var.ServiceDisplayName)"
@@ -14,8 +20,7 @@
                         Start="auto"
                         ErrorControl="normal"
                         Account="LocalSystem"
-                        Vital="yes"
-                        Arguments="&quot;[INSTALLFOLDER]$(var.ServiceEntrypoint)&quot;" />
+                        Vital="yes" />
         <ServiceControl Id="ConnectorServiceControl"
                         Name="$(var.ServiceName)"
                         Stop="both"

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Directory Id="DistDir" Name="dist">
+        <Component Id="DistFile_main_js" Guid="*">
+          <File Id="DistFile_main_jsFile" Source="$(StagingDir)\dist\main.js" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <ComponentGroup Id="ConnectorDistFiles">
+      <ComponentRef Id="DistFile_main_js" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

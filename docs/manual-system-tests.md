@@ -7,19 +7,19 @@ Run these checks on a Windows host before a customer rollout.
 These run on Linux/macOS CI and developer machines without executing the WiX installer:
 
 - `npm test` — packaging metadata, ProgramData config precedence, installer WiX source validation, and documentation assertions (including this checklist).
-- `npm run package:windows-installer` — prerequisite and staging checks only; full MSI/bundle build requires a Windows host with WiX Toolset and a staged `node.exe` under `installer/staging`.
+- `npm run package:windows-installer` — prerequisite and staging checks only; full MSI/bundle build requires a Windows host with WiX Toolset, a staged `node.exe`, a staged `PharmaAgentConnector.Service.exe`, and Windows x64 production `node_modules` available through `NODE_MODULES_PATH` or `installer/staging/node_modules`.
 - `RUN_WINDOWS_INSTALLER_TESTS=1 npm test` on Windows — optional gated build of `installer/bin/Release/PharmaAgentConnector.msi`.
 
 Treat a green non-Windows test run as proof of metadata and docs only. Installer install, repair, uninstall, and service-start behavior below are **Windows-gated** and must be executed manually on a prepared Windows host.
 
 ## Windows Installer Verification (Manual, Windows-Gated)
 
-Use `docs/windows-service.md` (**Installer-First Installation**) as the operator reference. Complete this section after `npm run package:windows-installer` produces `installer/bin/Release/PharmaAgentConnector.msi` on a Windows build host with WiX Toolset, a staged `node.exe`, and production dependencies under `installer/staging`.
+Use `docs/windows-service.md` (**Installer-First Installation**) as the operator reference. Complete this section after `npm run package:windows-installer` produces `installer/bin/Release/PharmaAgentConnector.msi` on a Windows build host with WiX Toolset, a staged `node.exe`, a staged `PharmaAgentConnector.Service.exe`, and Windows x64 production dependencies under `installer/staging` or `NODE_MODULES_PATH`.
 
 ### Prerequisites
 
 1. Use a Windows machine with administrator access for install, repair, and uninstall.
-2. Confirm WiX Toolset is installed and `installer/staging/node.exe` exists before packaging.
+2. Confirm WiX Toolset is installed and that `installer/staging/node.exe`, `installer/staging/PharmaAgentConnector.Service.exe`, and Windows x64 production `node_modules` are prepared before packaging.
 3. From the repository root on that host, run `npm ci`, then `npm run package:windows-installer`.
 4. Confirm `installer/bin/Release/PharmaAgentConnector.msi` exists and note its path for distribution.
 
@@ -29,15 +29,18 @@ Use `docs/windows-service.md` (**Installer-First Installation**) as the operator
 2. Complete the wizard with a test connector token and central WebSocket URL only. Do not enter database credentials in the installer UI.
 3. Confirm the completion screen reports service installation success and points to the remaining database onboarding step (`npm run database-setup --` / **After Windows Installer Completion** in `docs/configuration.md`).
 4. Confirm `Get-Service -Name PharmaAgentConnector` shows the service installed with automatic startup.
-5. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-config.json` contains `CONNECTOR_TOKEN` and `CONNECTOR_WS_URL` only (no `DB_PASSWORD`, `DB_DRIVER`, or mapping fields).
-6. Record installer success separately from production readiness. Database onboarding is still required before expecting synchronization.
+5. Confirm the install directory contains `PharmaAgentConnector.Service.exe`, `PharmaAgentConnector.Service.xml`, `node.exe`, `package.json`, `package-lock.json`, the full `dist\` tree including nested folders such as `dist\transport`, and production `node_modules\`.
+6. Confirm `PharmaAgentConnector.Service.xml` points at `%BASE%\node.exe` and `%BASE%\dist\main.js`, with log output under `%PROGRAMDATA%\PharmaAgentConnector\logs`.
+7. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-config.json` contains `CONNECTOR_TOKEN` and `CONNECTOR_WS_URL` only (no `DB_PASSWORD`, `DB_DRIVER`, or mapping fields), is valid JSON, and is encoded as UTF-8 without BOM.
+8. Record installer success separately from production readiness. Database onboarding is still required before expecting synchronization.
 
 ### Repair
 
 1. Re-run `PharmaAgentConnector.msi` on the same host and choose **Repair**.
 2. Confirm `Get-Service -Name PharmaAgentConnector` remains registered and starts automatically.
 3. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-config.json` is restored when it was missing or corrupted.
-4. Confirm repair UI, Windows Installer logs, and completion output do not print the connector token value.
+4. Confirm `PharmaAgentConnector.Service.exe` and `PharmaAgentConnector.Service.xml` are restored when removed or corrupted.
+5. Confirm repair UI, Windows Installer logs, and completion output do not print the connector token value.
 
 ### Uninstall
 
@@ -54,8 +57,10 @@ Run this after a successful installer-only install, before `npm run database-set
 1. Confirm machine environment variables do not yet include `DB_DRIVER`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, or `DB_PASSWORD` (unless intentionally pre-seeded for a negative test).
 2. Run `Start-Service -Name PharmaAgentConnector`.
 3. Confirm the Windows Service remains `Running` and logs `databaseConfigured=false` while waiting for database onboarding.
+4. Confirm logs include `service.setup_waiting` and `diagnostics.startup_report` with `serviceWrapper=WinSW`, `stateFilePath`, and `logPath`.
 4. Confirm service stdout/stderr logs and Event Viewer entries do not contain `CONNECTOR_TOKEN` or `DB_PASSWORD`.
-5. Complete `npm run database-setup --` per **Database Setup CLI Flow**, restart the service, and confirm startup validation succeeds before heartbeat or product synchronization checks.
+5. Temporarily point `CONNECTOR_WS_URL` at an unreachable or unauthorized WebSocket endpoint, restart the service, and confirm the process remains alive while logging reconnect attempts.
+6. Complete `npm run database-setup --` per **Database Setup CLI Flow**, restore the valid WebSocket URL, restart the service, and confirm startup validation succeeds before heartbeat or product synchronization checks.
 
 ### Installer Secret Handling
 
@@ -70,8 +75,9 @@ Use only when the WiX installer cannot run. See `docs/windows-service.md` (**Pow
 
 1. Build the connector with `npm ci` and `npm run build`.
 2. Set the required machine environment variables from `docs/configuration.md`.
-3. Run `.\scripts\install-service.ps1`.
-4. Confirm `Get-Service -Name PharmaAgentConnector` shows the service installed.
+3. Copy or download `PharmaAgentConnector.Service.exe` beside the built connector, or set `WINSW_EXE_PATH` to the WinSW executable.
+4. Run `.\scripts\install-service.ps1`.
+5. Confirm `Get-Service -Name PharmaAgentConnector` shows the service installed.
 
 ## Start, Stop, Restart
 
@@ -276,8 +282,11 @@ password are already known.
 
 ## Logs
 
-1. Confirm service logs include startup, configuration loaded, WebSocket connected, mapping received, poll completed, batch sent, batch acknowledged, and cursor advanced events.
-2. Confirm logs do not contain `CONNECTOR_TOKEN` or `DB_PASSWORD` values.
+1. Confirm service logs include `service.startup`, `configuration.loaded`, `diagnostics.startup_report`, WebSocket connected/reconnect events, mapping received/active, poll completed, batch sent, batch acknowledged, and cursor advanced events.
+2. If the host has not completed DB onboarding, confirm `service.setup_waiting` is present and that no secret values appear in the log payload.
+3. During database setup via connector messages, confirm `setup.config.received`, `setup.config.connection_test_started`, and either `setup.config.applied` or `setup.config.connection_failed`.
+4. When a DB connection is exercised, confirm either `database.connected` or `database.connection_failed`.
+5. Confirm logs do not contain `CONNECTOR_TOKEN` or `DB_PASSWORD` values.
 
 ## PowerShell Script Fallback Uninstall
 

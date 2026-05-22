@@ -9,6 +9,9 @@
   <?define ServiceDisplayName = "Pharma Agent Connector" ?>
   <?define ServiceDescription = "Outbound-only local connector for Pharma Agent product synchronization." ?>
   <?define ServiceEntrypoint = "dist\main.js" ?>
+  <?define ServiceWrapperExecutable = "PharmaAgentConnector.Service.exe" ?>
+  <?define ServiceWrapperConfigFile = "PharmaAgentConnector.Service.xml" ?>
   <?define ProgramDataDirName = "PharmaAgentConnector" ?>
   <?define ProgramDataConfigFileName = "connector-config.json" ?>
+  <?define ProgramDataLogDirName = "logs" ?>
 </Include>

@@ -15,7 +15,9 @@ The Windows installer writes central connection settings to:
 ```
 
 The file stores only installer-managed keys: `CONNECTOR_TOKEN`, `CONNECTOR_WS_URL`,
-and optional `LOG_LEVEL`. It does not store database credentials or mapping.
+and optional `LOG_LEVEL`. It does not store database credentials or mapping. The
+installer writes this JSON as UTF-8 without BOM so Windows and Node.js tooling can
+parse it consistently.
 
 When `PROGRAMDATA` is unset, the runtime falls back to a per-user directory under
 `AppData\Local\PharmaAgentConnector\` with the same file name.
@@ -60,6 +62,14 @@ Example PowerShell configuration:
 ```
 
 Secrets must not be pasted into support tickets or screenshots. Runtime logs redact connector tokens and database passwords.
+
+Important startup events:
+
+- `service.startup` includes connector version, `dbDriver`, `databaseConfigured`, state path, and log path.
+- `configuration.loaded` includes effective non-secret configuration and `databaseConfigured`.
+- `service.setup_waiting` appears when the service has central settings but no `DB_*` configuration yet.
+- `diagnostics.startup_report` summarizes runtime dependency checks (`dist`, `node_modules`, and the active DB driver package when applicable).
+- `database.connected` / `database.connection_failed` show adapter connect outcomes without exposing `DB_PASSWORD`.
 
 ## Local Interactive Database Setup
 
@@ -143,7 +153,14 @@ is ready to send production mapping.
 The MVP installer installs the `PharmaAgentConnector` service and collects only
 the connector token and central WebSocket URL. Database connection, table
 selection, and field mapping remain in this database setup flow — they are not
-part of the installer wizard.
+part of the installer wizard. The installed Windows Service is hosted by the
+WinSW wrapper `PharmaAgentConnector.Service.exe`, which launches
+`%BASE%\node.exe "%BASE%\dist\main.js"` and writes wrapper/stdout/stderr logs to
+`%PROGRAMDATA%\PharmaAgentConnector\logs`. The MSI is self-contained: it installs
+`node.exe`, `PharmaAgentConnector.Service.exe`, `PharmaAgentConnector.Service.xml`,
+`package.json`, `package-lock.json`, the full built `dist\` tree, and production
+runtime `node_modules\`. WinSW rotates service logs with a 10 MiB threshold and
+keeps 10 rolled files.
 
 After a successful install, run database onboarding on the same host that can
 reach the pharmacy database:
@@ -152,6 +169,11 @@ reach the pharmacy database:
 npm run build
 npm run database-setup --
 ```
+
+When building the MSI on Windows, prepare production `node_modules` that are
+compatible with Windows x64. Point `NODE_MODULES_PATH` at that prepared directory,
+or pre-stage it at `installer/staging/node_modules`, before running
+`npm run package:windows-installer`.
 
 Set database credentials through the CLI (machine environment variables or the
 generated `.env` file). Restart the Windows Service when central or database

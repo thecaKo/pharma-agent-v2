@@ -55,12 +55,44 @@ export function validateWixServiceMetadata(
     errors.push(`missing packaged entrypoint ${metadata.entrypointRelativePath}`);
   }
 
+  if (!combinedSource.includes("ConnectorDistFiles")) {
+    errors.push("missing generated dist component group ConnectorDistFiles");
+  }
+
+  if (!combinedSource.includes("ConnectorNodeModulesFiles")) {
+    errors.push("missing generated node_modules component group ConnectorNodeModulesFiles");
+  }
+
+  if (!combinedSource.includes(metadata.nodeExecutable)) {
+    errors.push(`missing packaged node runtime ${metadata.nodeExecutable}`);
+  }
+
+  if (!combinedSource.includes(metadata.serviceWrapperExecutable)) {
+    errors.push(`missing WinSW wrapper executable ${metadata.serviceWrapperExecutable}`);
+  }
+
+  if (!combinedSource.includes(metadata.serviceWrapperConfigurationFile)) {
+    errors.push(`missing WinSW wrapper configuration ${metadata.serviceWrapperConfigurationFile}`);
+  }
+
+  if (!combinedSource.includes("package-lock.json")) {
+    errors.push("missing packaged npm lockfile package-lock.json");
+  }
+
   if (!combinedSource.includes("<ServiceInstall")) {
     errors.push("missing ServiceInstall element");
   }
 
   if (!combinedSource.includes("<ServiceControl")) {
     errors.push("missing ServiceControl element");
+  }
+
+  if (combinedSource.includes('Arguments="&quot;[INSTALLFOLDER]')) {
+    errors.push("service install still passes runtime arguments directly instead of using the wrapper");
+  }
+
+  if (/<Component Id="ConnectorWindowsService"[\s\S]*Name="node\.exe"[\s\S]*KeyPath="yes"/u.test(combinedSource)) {
+    errors.push("node.exe must not be the Windows service KeyPath binary");
   }
 
   return errors;
