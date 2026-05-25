@@ -192,6 +192,22 @@ describe("ConnectorRuntime", () => {
     expect(timers.intervals).toHaveLength(1);
   });
 
+  it("logs heartbeat send failures instead of swallowing silently", async () => {
+    const transport = new FakeTransport();
+    const logger = silentLogger();
+    const adapter = adapterWithRows([]);
+    transport.sendHeartbeat.mockImplementationOnce(() => {
+      throw new Error("WebSocket is not connected");
+    });
+    const runtime = createRuntime({ transport, adapter, logger });
+    await runtime.start();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "heartbeat.send.failed",
+      expect.objectContaining({ message: "WebSocket is not connected" })
+    );
+  });
+
   it("snapshot mode persists confirmed hashes only after accepted ack", async () => {
     const stateStore = await tempStateStore();
     const transport = new FakeTransport();

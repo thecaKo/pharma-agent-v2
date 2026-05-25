@@ -841,8 +841,12 @@ export class ConnectorRuntime {
         lastErrorCode: this.lastErrorCode,
         sentAt: this.now()
       });
-    } catch {
-      // Heartbeat is best-effort; polling readiness still comes from transport state.
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn("heartbeat.send.failed", {
+        message,
+        mappingVersion: this.activeMapping?.mappingVersion
+      });
     }
   }
 
