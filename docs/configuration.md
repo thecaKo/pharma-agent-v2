@@ -47,6 +47,9 @@ Required variables:
 | `DB_USER` | Read-only source database user. |
 | `DB_PASSWORD` | Source database password. |
 | `LOG_LEVEL` | Optional: `debug`, `info`, `warn`, or `error`; defaults to `info`. |
+| `HEARTBEAT_INTERVAL_MS` | Período (ms) do heartbeat aplicativo enviado enquanto o connector está conectado. Default: `30000`. |
+| `WS_PING_INTERVAL_MS` | Período (ms) do ping nativo de WebSocket usado para detectar sockets zumbi. Default: `30000`. |
+| `WS_PONG_TIMEOUT_MS` | Tempo máximo (ms) para receber `pong` após um `ping`; se exceder, o socket é encerrado e o connector reconecta. Default: `10000`. |
 
 Example PowerShell configuration:
 
