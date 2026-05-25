@@ -222,6 +222,14 @@ Use `npm run mock-panel -- <command> --state-file <path>` to keep test state in
 a disposable file. To reset the default local simulator, delete
 `~/.pharma-agent/mock-panel-state.json`.
 
+## Modo de sincronizacao
+
+O agente suporta dois modos de sincronizacao de catalogo: `incremental` e `snapshot`. A escolha vem do mapping enviado pelo backend (`neo-api-pharmachatbot`) e e definida durante o cadastro do conector no painel web. O painel sugere automaticamente o modo com base nas colunas descobertas no schema da fonte de dados, mas o operador pode sobrescrever a sugestao antes de salvar o mapping.
+
+O modo `incremental` e adequado quando a base de dados do PDV possui uma coluna confiavel de cursor — tipicamente um campo de data/hora (`updated_at`, `data_alteracao`, `dt_alt`, etc.) ou um inteiro auto-incrementado que avanca sempre que um registro e alterado. Nesse modo o agente consulta apenas os produtos modificados desde o ultimo ciclo, usando o valor do cursor como filtro. O resultado e eficiente em volume de dados e em carga sobre o banco de origem, sendo o modo preferido sempre que existir um candidato viavel.
+
+O modo `snapshot` e adequado quando o schema da fonte nao possui campo de cursor confiavel — situacao comum em ERPs legados ou bases Firebird sem campo de auditoria. Nesse modo o agente le a tabela de produtos completa em paginas a cada ciclo de polling e envia ao painel apenas os produtos cujo payload sincronizado mudou desde o ultimo ACK aceito. O limite assumido para esse modo e ate 10 mil produtos; bases maiores devem ser migradas para incremental ou tratadas com suporte tecnico. Produtos removidos da fonte nao sao enviados automaticamente como inativos no modo snapshot.
+
 ## Product Synchronization
 
 ### Sync Mode
