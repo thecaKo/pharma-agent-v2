@@ -38,6 +38,12 @@ export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingC
   if (syncMode === "snapshot") {
     requireString(mapping.snapshotQuery, "snapshotQuery", issues);
     requirePositiveInteger(mapping.snapshotPageSize, "snapshotPageSize", issues);
+    if (mapping.cursorField?.trim()) {
+      issues.push({ field: "cursorField", message: "must be absent in snapshot mode" });
+    }
+    if (mapping.cursorType?.trim()) {
+      issues.push({ field: "cursorType", message: "must be absent in snapshot mode" });
+    }
   }
 
   if (issues.length > 0) {

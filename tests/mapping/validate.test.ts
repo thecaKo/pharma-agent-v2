@@ -132,6 +132,59 @@ describe("validateMappingConfig snapshot mode", () => {
   it("keeps incremental as the default sync mode", () => {
     expect(validateMappingConfig(validMapping()).syncMode).toBe("incremental");
   });
+
+  it("rejects snapshot mapping with cursorField set", () => {
+    expectIssue(
+      {
+        mappingVersion: "mapping-v1",
+        syncMode: "snapshot",
+        pollIntervalMs: 10_000,
+        batchSize: 500,
+        snapshotQuery: "select * from products order by product_id limit ? offset ?",
+        snapshotPageSize: 500,
+        cursorField: "updated_at",
+        fields: { sourceProductCode: "product_id", name: "description" }
+      },
+      "cursorField"
+    );
+  });
+
+  it("rejects snapshot mapping with cursorType set", () => {
+    expectIssue(
+      {
+        mappingVersion: "mapping-v1",
+        syncMode: "snapshot",
+        pollIntervalMs: 10_000,
+        batchSize: 500,
+        snapshotQuery: "select * from products order by product_id limit ? offset ?",
+        snapshotPageSize: 500,
+        cursorType: "timestamp",
+        fields: { sourceProductCode: "product_id", name: "description" }
+      },
+      "cursorType"
+    );
+  });
+});
+
+describe("validateMappingConfig syncMode validation", () => {
+  it("reports syncMode issue when syncMode is invalid", () => {
+    expectIssue(
+      validMapping({ syncMode: "invalid" as unknown as "incremental" }),
+      "syncMode"
+    );
+  });
+
+  it("reports syncMode issue when syncMode is an unknown string", () => {
+    try {
+      validateMappingConfig(validMapping({ syncMode: "bulk" as unknown as "incremental" }));
+    } catch (error) {
+      expect(error).toBeInstanceOf(MappingValidationError);
+      const fields = (error as MappingValidationError).issues.map((i) => i.field);
+      expect(fields).toContain("syncMode");
+      return;
+    }
+    throw new Error("Expected syncMode validation issue");
+  });
 });
 
 function expectIssue(mapping: MappingConfig, field: string): void {
