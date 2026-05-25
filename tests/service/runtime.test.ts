@@ -1106,8 +1106,10 @@ async function tempStateStore(): Promise<StateStore> {
 
 function manualTimers() {
   const callbacks: Array<() => void> = [];
+  const intervals: Array<{ callback: () => void; delayMs: number }> = [];
   return {
     callbacks,
+    intervals,
     setTimeout: (callback: () => void) => {
       callbacks.push(callback);
       return callback;
@@ -1116,6 +1118,17 @@ function manualTimers() {
       const index = callbacks.indexOf(handle as () => void);
       if (index >= 0) {
         callbacks.splice(index, 1);
+      }
+    },
+    setInterval: (callback: () => void, delayMs: number) => {
+      const handle = { callback, delayMs };
+      intervals.push(handle);
+      return handle;
+    },
+    clearInterval: (handle: unknown) => {
+      const index = intervals.indexOf(handle as { callback: () => void; delayMs: number });
+      if (index >= 0) {
+        intervals.splice(index, 1);
       }
     }
   };

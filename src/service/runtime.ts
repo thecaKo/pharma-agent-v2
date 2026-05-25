@@ -84,6 +84,8 @@ export interface RuntimeTransport {
 export interface RuntimeTimers {
   setTimeout(callback: () => void, delayMs: number): unknown;
   clearTimeout(handle: unknown): void;
+  setInterval(callback: () => void, delayMs: number): unknown;
+  clearInterval(handle: unknown): void;
 }
 
 export interface ConnectorRuntimeOptions {
@@ -119,7 +121,9 @@ class DatabaseConfigurationUnavailableError extends Error {
 
 const defaultTimers: RuntimeTimers = {
   setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  setInterval: (callback, delayMs) => setInterval(callback, delayMs),
+  clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>)
 };
 
 type ActivePoller = IncrementalPoller | SnapshotPoller;
