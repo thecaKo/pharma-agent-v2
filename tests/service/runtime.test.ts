@@ -175,7 +175,19 @@ describe("ConnectorRuntime", () => {
     transport.emit("disconnected", { code: 1006, reason: "" });
     expect(timers.intervals).toHaveLength(0);
 
-    transport.connected = true;
+    await transport.connect();
+    expect(timers.intervals).toHaveLength(1);
+  });
+
+  it("does not leak intervals when 'connected' fires twice without an intervening 'disconnected'", async () => {
+    const transport = new FakeTransport();
+    const timers = manualTimers();
+    const runtime = createRuntime({ transport, adapter: adapterWithRows([]), timers });
+    await runtime.start();
+
+    expect(timers.intervals).toHaveLength(1);
+
+    // simulate a duplicate "connected" event (e.g., transport-level re-handshake)
     transport.emit("connected");
     expect(timers.intervals).toHaveLength(1);
   });
