@@ -44,7 +44,7 @@ describe("package metadata", () => {
       build: "tsc -p tsconfig.json",
       "database-setup": "node dist/cli/database-setup.js",
       start: "node dist/main.js",
-      "start:dev": "NODE_ENV=dev tsx src/main.ts",
+      "start:dev": "NODE_ENV=dev LOG_FORMAT=pretty tsx src/main.ts",
       test: "vitest run",
       coverage: "vitest run --coverage"
     });

@@ -1,4 +1,5 @@
 import pino, { type DestinationStream } from "pino";
+import pretty from "pino-pretty";
 import type { LogLevel } from "../config/types.js";
 import { redactValue } from "./redact.js";
 
@@ -9,11 +10,14 @@ export interface Logger {
   error(event: string, metadata?: Record<string, unknown>): void;
 }
 
+export type LogFormat = "json" | "pretty";
+
 export interface LoggerOptions {
   level: LogLevel;
   secrets?: readonly string[];
   output?: Pick<Console, "log" | "error">;
   nodeEnv?: string;
+  logFormat?: LogFormat;
 }
 
 const noopLogger: Logger = {
@@ -34,16 +38,17 @@ export function createLogger(options: LoggerOptions): Logger {
       level: options.level,
       base: undefined,
       timestamp: pino.stdTimeFunctions.isoTime,
+      messageKey: "event",
       formatters: {
         level: (label) => ({ level: label })
       }
     },
-    buildOutputStream(options.output ?? console)
+    resolveStream(options)
   );
 
   function write(level: LogLevel, event: string, metadata: Record<string, unknown> = {}): void {
-    const entry = redactValue({ event, ...metadata }, options.secrets ?? []);
-    logger[level](entry);
+    const safeMeta = redactValue(metadata, options.secrets ?? []) as object;
+    logger[level](safeMeta, event);
   }
 
   return {
@@ -54,7 +59,31 @@ export function createLogger(options: LoggerOptions): Logger {
   };
 }
 
-function buildOutputStream(output: Pick<Console, "log" | "error">): DestinationStream {
+function resolveStream(options: LoggerOptions): DestinationStream {
+  if (options.output) {
+    return buildConsoleJsonStream(options.output);
+  }
+  const format = options.logFormat ?? readLogFormatEnv() ?? "json";
+  if (format === "pretty") {
+    return pretty({
+      colorize: true,
+      translateTime: "SYS:HH:MM:ss.l",
+      ignore: "pid,hostname",
+      messageKey: "event"
+    });
+  }
+  return buildConsoleJsonStream(console);
+}
+
+function readLogFormatEnv(): LogFormat | undefined {
+  const raw = process.env.LOG_FORMAT?.trim().toLowerCase();
+  if (raw === "json" || raw === "pretty") {
+    return raw;
+  }
+  return undefined;
+}
+
+function buildConsoleJsonStream(output: Pick<Console, "log" | "error">): DestinationStream {
   return {
     write(line: string): void {
       const trimmed = line.trimEnd();

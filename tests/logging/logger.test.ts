@@ -64,4 +64,28 @@ describe("createLogger", () => {
     expect(output.log).not.toHaveBeenCalled();
     expect(output.error).not.toHaveBeenCalled();
   });
+
+  it("emits JSON when logFormat is 'json' explicitly", () => {
+    const output = {
+      log: vi.fn(),
+      error: vi.fn()
+    };
+    const logger = createLogger({
+      level: "info",
+      output,
+      nodeEnv: "dev",
+      logFormat: "json"
+    });
+
+    logger.info("poll.started", { connectorId: "abc" });
+
+    expect(output.log).toHaveBeenCalledOnce();
+    const line = output.log.mock.calls[0]?.[0] as string;
+    expect(() => JSON.parse(line)).not.toThrow();
+    expect(JSON.parse(line)).toMatchObject({
+      level: "info",
+      event: "poll.started",
+      connectorId: "abc"
+    });
+  });
 });
