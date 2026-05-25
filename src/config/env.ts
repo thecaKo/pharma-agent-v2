@@ -32,6 +32,24 @@ export interface LoadConfigOptions {
 const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird"]);
 const LOG_LEVELS = new Set<LogLevel>(["debug", "info", "warn", "error"]);
 
+function parsePositiveInteger(
+  raw: string | undefined,
+  fallback: number,
+  fieldName: string,
+  issues: ConfigValidationIssue[]
+): number {
+  const value = raw?.trim();
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    issues.push({ field: fieldName, message: "must be a positive integer" });
+    return fallback;
+  }
+  return parsed;
+}
+
 export class ConfigValidationError extends Error {
   public readonly issues: ConfigValidationIssue[];
 
@@ -52,6 +70,25 @@ export function loadConfig(
 ): ConnectorConfig | ConnectorStartupConfig {
   const requireDatabase = options.requireDatabase ?? true;
   const issues: ConfigValidationIssue[] = [];
+
+  const heartbeatIntervalMs = parsePositiveInteger(
+    env.HEARTBEAT_INTERVAL_MS,
+    30_000,
+    "HEARTBEAT_INTERVAL_MS",
+    issues
+  );
+  const wsPingIntervalMs = parsePositiveInteger(
+    env.WS_PING_INTERVAL_MS,
+    30_000,
+    "WS_PING_INTERVAL_MS",
+    issues
+  );
+  const wsPongTimeoutMs = parsePositiveInteger(
+    env.WS_PONG_TIMEOUT_MS,
+    10_000,
+    "WS_PONG_TIMEOUT_MS",
+    issues
+  );
 
   for (const field of REQUIRED_ENV) {
     if (!requireDatabase && isDatabaseField(field)) {
@@ -74,7 +111,10 @@ export function loadConfig(
     return {
       connectorToken: readRequired(env, "CONNECTOR_TOKEN"),
       websocketUrl: readRequired(env, "CONNECTOR_WS_URL"),
-      logLevel: logLevel as LogLevel
+      logLevel: logLevel as LogLevel,
+      heartbeatIntervalMs,
+      wsPingIntervalMs,
+      wsPongTimeoutMs
     };
   }
 
@@ -117,7 +157,10 @@ export function loadConfig(
       user: readRequired(env, "DB_USER"),
       password: readRequired(env, "DB_PASSWORD")
     },
-    logLevel: logLevel as LogLevel
+    logLevel: logLevel as LogLevel,
+    heartbeatIntervalMs,
+    wsPingIntervalMs,
+    wsPongTimeoutMs
   };
 }
 

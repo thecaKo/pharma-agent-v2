@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { ConfigValidationError, configSecrets, loadConfig } from "../../src/config/env.js";
+import {
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_WS_PING_INTERVAL_MS,
+  DEFAULT_WS_PONG_TIMEOUT_MS
+} from "../../src/config/types.js";
 import { validEnv } from "../helpers/env.js";
+
+const baseEnv = {
+  CONNECTOR_TOKEN: "pac_test",
+  CONNECTOR_WS_URL: "wss://example/connectors/ws",
+  DB_DRIVER: "mysql",
+  DB_HOST: "localhost",
+  DB_PORT: "3306",
+  DB_NAME: "pharma",
+  DB_USER: "user",
+  DB_PASSWORD: "secret"
+};
 
 describe("loadConfig", () => {
   it("returns typed connector configuration for mysql", () => {
@@ -17,7 +33,10 @@ describe("loadConfig", () => {
         user: "readonly",
         password: "test-db-password"
       },
-      logLevel: "info"
+      logLevel: "info",
+      heartbeatIntervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
+      wsPingIntervalMs: DEFAULT_WS_PING_INTERVAL_MS,
+      wsPongTimeoutMs: DEFAULT_WS_PONG_TIMEOUT_MS
     });
   });
 
@@ -86,5 +105,38 @@ describe("loadConfig", () => {
     const config = loadConfig(validEnv());
 
     expect(configSecrets(config)).toEqual(["test-connector-token", "test-db-password"]);
+  });
+});
+
+describe("loadConfig — heartbeat/ping envs", () => {
+  it("returns defaults when envs absent", () => {
+    const config = loadConfig({ ...baseEnv });
+    expect(config.heartbeatIntervalMs).toBe(DEFAULT_HEARTBEAT_INTERVAL_MS);
+    expect(config.wsPingIntervalMs).toBe(DEFAULT_WS_PING_INTERVAL_MS);
+    expect(config.wsPongTimeoutMs).toBe(DEFAULT_WS_PONG_TIMEOUT_MS);
+  });
+
+  it("parses overrides from env", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      HEARTBEAT_INTERVAL_MS: "15000",
+      WS_PING_INTERVAL_MS: "20000",
+      WS_PONG_TIMEOUT_MS: "5000"
+    });
+    expect(config.heartbeatIntervalMs).toBe(15000);
+    expect(config.wsPingIntervalMs).toBe(20000);
+    expect(config.wsPongTimeoutMs).toBe(5000);
+  });
+
+  it("rejects non-positive integers", () => {
+    expect(() =>
+      loadConfig({ ...baseEnv, HEARTBEAT_INTERVAL_MS: "0" })
+    ).toThrow(/HEARTBEAT_INTERVAL_MS/);
+    expect(() =>
+      loadConfig({ ...baseEnv, WS_PING_INTERVAL_MS: "-1" })
+    ).toThrow(/WS_PING_INTERVAL_MS/);
+    expect(() =>
+      loadConfig({ ...baseEnv, WS_PONG_TIMEOUT_MS: "abc" })
+    ).toThrow(/WS_PONG_TIMEOUT_MS/);
   });
 });
