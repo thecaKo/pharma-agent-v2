@@ -144,6 +144,42 @@ describe("ConnectorRuntime", () => {
     expect(timers.callbacks).toHaveLength(1);
   });
 
+  it("sends periodic heartbeats while connected", async () => {
+    const transport = new FakeTransport();
+    const timers = manualTimers();
+    const runtime = createRuntime({ transport, adapter: adapterWithRows([]), timers });
+    await runtime.start();
+
+    // initial heartbeat on "connected" event already happened
+    expect(transport.sendHeartbeat).toHaveBeenCalledTimes(1);
+
+    // interval should be registered
+    expect(timers.intervals).toHaveLength(1);
+    const heartbeatInterval = timers.intervals[0]!;
+    expect(heartbeatInterval.delayMs).toBe(30_000);
+
+    // simulate two ticks
+    heartbeatInterval.callback();
+    heartbeatInterval.callback();
+    expect(transport.sendHeartbeat).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops periodic heartbeats on disconnect and restarts on reconnect", async () => {
+    const transport = new FakeTransport();
+    const timers = manualTimers();
+    const runtime = createRuntime({ transport, adapter: adapterWithRows([]), timers });
+    await runtime.start();
+
+    expect(timers.intervals).toHaveLength(1);
+
+    transport.emit("disconnected", { code: 1006, reason: "" });
+    expect(timers.intervals).toHaveLength(0);
+
+    transport.connected = true;
+    transport.emit("connected");
+    expect(timers.intervals).toHaveLength(1);
+  });
+
   it("snapshot mode persists confirmed hashes only after accepted ack", async () => {
     const stateStore = await tempStateStore();
     const transport = new FakeTransport();
@@ -1194,7 +1230,7 @@ class FakeTransport extends EventEmitter implements RuntimeTransport {
       this.sentSetupConfigResults.push(message);
     }
   );
-  private connected = false;
+  public connected = false;
 
   public isConnected(): boolean {
     return this.connected;

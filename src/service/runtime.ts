@@ -148,6 +148,7 @@ export class ConnectorRuntime {
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
   private pollTimer?: unknown;
+  private heartbeatIntervalHandle?: unknown;
   private pendingPoll?: Promise<void>;
   private pendingStateWrite: Promise<void> = Promise.resolve();
   private pollingPaused = true;
@@ -249,6 +250,7 @@ export class ConnectorRuntime {
   }
 
   public async shutdown(): Promise<void> {
+    this.stopHeartbeatLoop();
     this.stopped = true;
     this.pollingPaused = true;
     this.stopPollTimer();
@@ -287,11 +289,13 @@ export class ConnectorRuntime {
         reconnectAttemptCount: this.transport.getReconnectAttemptCount()
       });
       this.sendHeartbeat();
+      this.startHeartbeatLoop();
     });
     this.transport.on("disconnected", () => {
       this.logger.warn("websocket.disconnected", {
         mappingVersion: this.activeMapping?.mappingVersion
       });
+      this.stopHeartbeatLoop();
     });
     this.transport.on("config", (message) => {
       this.handleConfig(message).catch((error) => this.handleRuntimeError("CONFIG_ACTIVATION_FAILED", error));
@@ -839,6 +843,20 @@ export class ConnectorRuntime {
       });
     } catch {
       // Heartbeat is best-effort; polling readiness still comes from transport state.
+    }
+  }
+
+  private startHeartbeatLoop(): void {
+    this.stopHeartbeatLoop();
+    this.heartbeatIntervalHandle = this.timers.setInterval(() => {
+      this.sendHeartbeat();
+    }, this.config.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeatLoop(): void {
+    if (this.heartbeatIntervalHandle !== undefined) {
+      this.timers.clearInterval(this.heartbeatIntervalHandle);
+      this.heartbeatIntervalHandle = undefined;
     }
   }
 
