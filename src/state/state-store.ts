@@ -27,7 +27,8 @@ const STATE_KEYS = [
   "sourceProductCodeField",
   "lastAckedCursor",
   "lastSuccessfulSendAt",
-  "lastBatchId"
+  "lastBatchId",
+  "snapshotState"
 ] as const;
 
 export class StateStore {
@@ -90,6 +91,7 @@ export function pickPersistedState(state: ConnectorState): ConnectorState {
   }
 
   persisted.lastAckedCursor = normalizeCursorValue(persisted.cursorType, persisted.lastAckedCursor);
+  persisted.snapshotState = normalizeSnapshotState(persisted.snapshotState);
 
   return persisted;
 }
@@ -143,6 +145,56 @@ export function isIgnorableFsyncError(error: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeSnapshotState(value: unknown): ConnectorState["snapshotState"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const fieldsSignature = typeof value.fieldsSignature === "string" ? value.fieldsSignature.trim() : "";
+  if (!fieldsSignature) {
+    return undefined;
+  }
+
+  const products: NonNullable<ConnectorState["snapshotState"]>["products"] = {};
+  if (isRecord(value.products)) {
+    for (const [code, entry] of Object.entries(value.products)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      if (
+        typeof entry.hash === "string" &&
+        typeof entry.lastSeenAt === "string" &&
+        typeof entry.lastConfirmedAt === "string"
+      ) {
+        products[code] = {
+          hash: entry.hash,
+          lastSeenAt: entry.lastSeenAt,
+          lastConfirmedAt: entry.lastConfirmedAt
+        };
+      }
+    }
+  }
+
+  const pending: NonNullable<ConnectorState["snapshotState"]>["pending"] = [];
+  if (Array.isArray(value.pending)) {
+    for (const entry of value.pending) {
+      if (
+        isRecord(entry) &&
+        typeof entry.sourceProductCode === "string" &&
+        typeof entry.hash === "string" &&
+        isRecord(entry.record)
+      ) {
+        pending.push({
+          sourceProductCode: entry.sourceProductCode,
+          hash: entry.hash,
+          record: entry.record as unknown as NonNullable<ConnectorState["snapshotState"]>["pending"][number]["record"]
+        });
+      }
+    }
+  }
+
+  return { fieldsSignature, products, pending };
 }
 
 function normalizeCursorValue(

@@ -39,6 +39,42 @@ describe("StateStore", () => {
     await expect(new StateStore({ stateFilePath: path }).load()).resolves.toEqual(state);
   });
 
+  it("saves and reloads snapshot state", async () => {
+    const path = await stateFilePath();
+    const store = new StateStore({ stateFilePath: path });
+    const state: ConnectorState = {
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mappingVersion: "mapping-v1",
+      snapshotState: {
+        fieldsSignature: "sig-1",
+        products: {
+          "P-001": {
+            hash: "hash-1",
+            lastSeenAt: "2026-05-25T12:00:00.000Z",
+            lastConfirmedAt: "2026-05-25T12:00:01.000Z"
+          }
+        },
+        pending: [
+          {
+            sourceProductCode: "P-002",
+            hash: "hash-2",
+            record: {
+              sourceProductCode: "P-002",
+              name: "Produto 2",
+              price: 12.5,
+              stock: 3
+            }
+          }
+        ]
+      }
+    };
+
+    await store.save(state);
+
+    await expect(new StateStore({ stateFilePath: path }).load()).resolves.toEqual(state);
+  });
+
   it("saves and reloads the last valid mapping for startup resume", async () => {
     const path = await stateFilePath();
     const store = new StateStore({ stateFilePath: path });

@@ -40,6 +40,31 @@ describe("FirebirdSourceAdapter", () => {
     expect(rows).toEqual([{ product_id: "P-001", updated_at: 12 }]);
   });
 
+  it("queries snapshot pages with start and end row bounds", async () => {
+    const connection: FirebirdDriverConnection = {
+      query: vi.fn(async () => [{ PRODUCT_ID: "P-001" }]),
+      detach: vi.fn(async () => undefined)
+    };
+    const adapter = new FirebirdSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    await expect(
+      adapter.querySnapshotPage({
+        sql: "select * from products order by product_id rows ? to ?",
+        limit: 500,
+        offset: 1000
+      })
+    ).resolves.toEqual([{ PRODUCT_ID: "P-001" }]);
+
+    expect(connection.query).toHaveBeenCalledWith(
+      "select * from products order by product_id rows ? to ?",
+      [1001, 1500]
+    );
+  });
+
   it("normalizes query failures without leaking password or local database path", async () => {
     const connection: FirebirdDriverConnection = {
       query: vi.fn(async () => {

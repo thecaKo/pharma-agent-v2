@@ -62,6 +62,9 @@ function artifactV1ToMappingConfig(record: Record<string, unknown>): MappingConf
   const cursorType = record.cursorType === "timestamp" || record.cursorType === "number" ? record.cursorType : undefined;
 
   const batchSize = typeof record.batchSize === "number" ? record.batchSize : Number.NaN;
+  const syncMode = record.syncMode === "snapshot" ? "snapshot" : "incremental";
+  const snapshotQuery = typeof record.snapshotQuery === "string" ? record.snapshotQuery : undefined;
+  const snapshotPageSize = Number.isInteger(record.snapshotPageSize) ? (record.snapshotPageSize as number) : undefined;
 
   const fields: ProductFieldMappings = {
     sourceProductCode: optionalTrimmedField(fieldsRecord, "sourceProductCode"),
@@ -77,10 +80,13 @@ function artifactV1ToMappingConfig(record: Record<string, unknown>): MappingConf
     mappingVersion: LOCAL_ONBOARDING_MAPPING_VERSION,
     pollIntervalMs: DEFAULT_ONBOARDING_ARTIFACT_POLL_INTERVAL_MS,
     selectedProductTable: optionalTrimmedField(record, "selectedProductTable"),
+    syncMode,
     batchSize,
     incrementalQuery: typeof record.incrementalQuery === "string" ? record.incrementalQuery : "",
     cursorField: typeof record.cursorField === "string" ? record.cursorField : "",
     cursorType,
+    snapshotQuery,
+    snapshotPageSize,
     fields
   };
 }

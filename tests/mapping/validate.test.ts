@@ -91,6 +91,49 @@ describe("validateMappingConfig", () => {
   });
 });
 
+describe("validateMappingConfig snapshot mode", () => {
+  it("accepts snapshot mapping without cursor fields", () => {
+    expect(
+      validateMappingConfig({
+        mappingVersion: "mapping-v1",
+        syncMode: "snapshot",
+        selectedProductTable: "products",
+        pollIntervalMs: 10_000,
+        batchSize: 500,
+        snapshotQuery: "select * from products order by product_id limit ? offset ?",
+        snapshotPageSize: 500,
+        fields: {
+          sourceProductCode: "product_id",
+          name: "description",
+          price: "sale_price",
+          stock: "quantity"
+        }
+      })
+    ).toMatchObject({
+      syncMode: "snapshot",
+      snapshotQuery: "select * from products order by product_id limit ? offset ?",
+      snapshotPageSize: 500
+    });
+  });
+
+  it("rejects snapshot mapping without snapshotQuery", () => {
+    expect(() =>
+      validateMappingConfig({
+        ...validMapping({ syncMode: "snapshot" }),
+        incrementalQuery: undefined,
+        cursorField: undefined,
+        cursorType: undefined,
+        snapshotQuery: undefined,
+        snapshotPageSize: 500
+      })
+    ).toThrow(MappingValidationError);
+  });
+
+  it("keeps incremental as the default sync mode", () => {
+    expect(validateMappingConfig(validMapping()).syncMode).toBe("incremental");
+  });
+});
+
 function expectIssue(mapping: MappingConfig, field: string): void {
   try {
     validateMappingConfig(mapping);

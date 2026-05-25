@@ -15,8 +15,9 @@ import type { ValidatedMappingConfig } from "../mapping/types.js";
 import { validateMappingConfig } from "../mapping/validate.js";
 import { IncrementalPoller } from "../poller/incremental-poller.js";
 import type { ProductChangeBatch } from "../poller/batch-builder.js";
+import { SnapshotPoller } from "../poller/snapshot-poller.js";
 import { StateStore } from "../state/state-store.js";
-import { STATE_FILE_NAME, type ConnectorState } from "../state/state-types.js";
+import { STATE_FILE_NAME, type ConnectorState, type PendingSnapshotProduct } from "../state/state-types.js";
 import type {
   BatchAckMessage,
   AdminResponseMessage,
@@ -121,6 +122,8 @@ const defaultTimers: RuntimeTimers = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
 };
 
+type ActivePoller = IncrementalPoller | SnapshotPoller;
+
 export class ConnectorRuntime {
   private config: ConnectorRuntimeConfig;
   private readonly env?: Environment;
@@ -133,11 +136,13 @@ export class ConnectorRuntime {
   private readonly transport: RuntimeTransport;
   private readonly timers: RuntimeTimers;
   private readonly now: () => string;
-  private poller?: IncrementalPoller;
+  private poller?: ActivePoller;
   private activeMapping?: ValidatedMappingConfig;
   private activeConnectorId?: string;
   private activeCustomerId?: string;
   private inFlightBatch?: ProductChangeBatch;
+  private inFlightSnapshotPending?: PendingSnapshotProduct[];
+  private inFlightSnapshotFieldsSignature?: string;
   private pollTimer?: unknown;
   private pendingPoll?: Promise<void>;
   private pendingStateWrite: Promise<void> = Promise.resolve();
@@ -361,8 +366,8 @@ export class ConnectorRuntime {
       mapping,
       mappingVersion: mapping.mappingVersion,
       selectedProductTable: mapping.selectedProductTable,
-      cursorField: mapping.cursorField,
-      cursorType: mapping.cursorType,
+      cursorField: mapping.syncMode === "incremental" ? mapping.cursorField : undefined,
+      cursorType: mapping.syncMode === "incremental" ? mapping.cursorType : undefined,
       sourceProductCodeField: mapping.fields.sourceProductCode,
       lastAckedCursor: keepCursor ? previous.lastAckedCursor ?? null : null,
       lastSuccessfulSendAt: previous.lastSuccessfulSendAt,
@@ -374,17 +379,32 @@ export class ConnectorRuntime {
     this.activeConnectorId = connectorId;
     this.activeCustomerId = customerId;
     this.inFlightBatch = undefined;
-    this.poller = new IncrementalPoller({
-      adapter,
-      mapping,
-      state: this.stateStore,
-      connectorId,
-      customerId,
-      isTransportReady: () => this.transport.isConnected(),
-      hasUnacknowledgedBatch: () => this.inFlightBatch !== undefined,
-      logger: this.logger,
-      now: this.now
-    });
+    this.inFlightSnapshotPending = undefined;
+    this.inFlightSnapshotFieldsSignature = undefined;
+    this.poller =
+      mapping.syncMode === "snapshot"
+        ? new SnapshotPoller({
+            adapter,
+            mapping,
+            state: this.stateStore,
+            connectorId,
+            customerId,
+            isTransportReady: () => this.transport.isConnected(),
+            hasUnacknowledgedBatch: () => this.inFlightBatch !== undefined,
+            logger: this.logger,
+            now: this.now
+          })
+        : new IncrementalPoller({
+            adapter,
+            mapping,
+            state: this.stateStore,
+            connectorId,
+            customerId,
+            isTransportReady: () => this.transport.isConnected(),
+            hasUnacknowledgedBatch: () => this.inFlightBatch !== undefined,
+            logger: this.logger,
+            now: this.now
+          });
     this.pollingPaused = false;
 
     this.logger.info("mapping.active", {
@@ -653,20 +673,24 @@ export class ConnectorRuntime {
     if (message.accepted && message.nextAction === "continue") {
       const state = await this.stateStore.load();
       const lastSuccessfulSendAt = this.now();
+      const snapshotState = this.buildAcceptedSnapshotState(state, batch.batchId);
       await this.saveState({
         ...state,
         connectorId: batch.connectorId,
         customerId: batch.customerId,
         mappingVersion: batch.mappingVersion,
         selectedProductTable: this.activeMapping?.selectedProductTable,
-        cursorField: this.activeMapping?.cursorField,
-        cursorType: this.activeMapping?.cursorType,
+        cursorField: this.activeMapping?.syncMode === "incremental" ? this.activeMapping.cursorField : undefined,
+        cursorType: this.activeMapping?.syncMode === "incremental" ? this.activeMapping.cursorType : undefined,
         sourceProductCodeField: this.activeMapping?.fields.sourceProductCode,
         lastAckedCursor: batch.cursorAfter,
         lastSuccessfulSendAt,
-        lastBatchId: batch.batchId
+        lastBatchId: batch.batchId,
+        snapshotState
       });
       this.inFlightBatch = undefined;
+      this.inFlightSnapshotPending = undefined;
+      this.inFlightSnapshotFieldsSignature = undefined;
       this.logger.info("cursor advanced", {
         connectorId: batch.connectorId,
         customerId: batch.customerId,
@@ -708,6 +732,13 @@ export class ConnectorRuntime {
         if (result.status === "batch" && result.batch) {
           this.transport.sendBatch(result.batch, this.now());
           this.inFlightBatch = result.batch;
+          if ("snapshotPending" in result) {
+            this.inFlightSnapshotPending = result.snapshotPending;
+            this.inFlightSnapshotFieldsSignature = result.fieldsSignature;
+          } else {
+            this.inFlightSnapshotPending = undefined;
+            this.inFlightSnapshotFieldsSignature = undefined;
+          }
           return;
         }
         this.scheduleNextPoll();
@@ -837,6 +868,41 @@ export class ConnectorRuntime {
     };
   }
 
+  private buildAcceptedSnapshotState(
+    state: ConnectorState,
+    batchId: string
+  ): ConnectorState["snapshotState"] | undefined {
+    if (!this.inFlightSnapshotPending || !this.inFlightSnapshotFieldsSignature || !this.inFlightBatch) {
+      return state.snapshotState;
+    }
+
+    const confirmedCodes = new Set(this.inFlightBatch.records.map((record) => record.sourceProductCode));
+    const now = this.now();
+    const products =
+      state.snapshotState?.fieldsSignature === this.inFlightSnapshotFieldsSignature
+        ? { ...state.snapshotState.products }
+        : {};
+    const pending: PendingSnapshotProduct[] = [];
+
+    for (const entry of this.inFlightSnapshotPending) {
+      if (confirmedCodes.has(entry.sourceProductCode)) {
+        products[entry.sourceProductCode] = {
+          hash: entry.hash,
+          lastSeenAt: now,
+          lastConfirmedAt: now
+        };
+        continue;
+      }
+      pending.push(entry);
+    }
+
+    return {
+      fieldsSignature: this.inFlightSnapshotFieldsSignature,
+      products,
+      pending
+    };
+  }
+
   private configuredProgramDataPath(): string | undefined {
     const value = this.env?.PROGRAMDATA;
     return value && value.trim().length > 0 ? value : undefined;
@@ -909,6 +975,10 @@ function canReuseAcknowledgedCursor(
   previous: ConnectorState,
   nextMapping: ValidatedMappingConfig
 ): boolean {
+  if (nextMapping.syncMode !== "incremental") {
+    return false;
+  }
+
   if (previous.lastAckedCursor === undefined || previous.lastAckedCursor === null) {
     return false;
   }

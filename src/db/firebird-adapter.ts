@@ -2,7 +2,7 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
-import type { DatabaseColumn, DatabaseTable, QueryChangesInput, SourceDatabaseAdapter } from "./source-adapter.js";
+import type { DatabaseColumn, DatabaseTable, QueryChangesInput, QuerySnapshotPageInput, SourceDatabaseAdapter } from "./source-adapter.js";
 
 export interface FirebirdConnectionConfig {
   host: string;
@@ -80,6 +80,24 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
 
     try {
       const result = await connection.query(input.sql, [input.cursor, input.limit]);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "firebird",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async querySnapshotPage(input: QuerySnapshotPageInput): Promise<SourceRow[]> {
+    const connection = this.requireConnection();
+
+    try {
+      const start = input.offset + 1;
+      const end = input.offset + input.limit;
+      const result = await connection.query(input.sql, [start, end]);
       return normalizeRows(result);
     } catch (error) {
       throw normalizeDatabaseError({

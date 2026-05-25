@@ -219,6 +219,16 @@ Use `npm run mock-panel -- <command> --state-file <path>` to keep test state in
 a disposable file. To reset the default local simulator, delete
 `~/.pharma-agent/mock-panel-state.json`.
 
+## Product Synchronization
+
+### Sync Mode
+
+Use `incremental` when the ERP has a cursor field that advances whenever a synchronized product field changes.
+
+Use `snapshot` when the ERP does not have a reliable update field. Snapshot mode reads the full product list in pages on each polling cycle and sends only products whose synchronized payload changed since the last accepted ACK.
+
+Snapshot mode is intended for catalogs up to 10,000 products. Removed products are ignored; they are not automatically sent as inactive.
+
 ## Database File Discovery
 
 The database file discovery CLI is an onboarding utility for locating likely

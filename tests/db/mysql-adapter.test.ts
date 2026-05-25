@@ -40,6 +40,31 @@ describe("MySqlSourceAdapter", () => {
     expect(rows).toEqual([{ product_id: "P-001", updated_at: 12 }]);
   });
 
+  it("queries snapshot pages with limit and offset", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => [[{ product_id: "P-001" }]]),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    await expect(
+      adapter.querySnapshotPage({
+        sql: "select * from products order by product_id limit ? offset ?",
+        limit: 500,
+        offset: 1000
+      })
+    ).resolves.toEqual([{ product_id: "P-001" }]);
+
+    expect(connection.query).toHaveBeenCalledWith(
+      "select * from products order by product_id limit ? offset ?",
+      [500, 1000]
+    );
+  });
+
   it("coerces timestamp cursor strings into Date values for mysql datetime parameters", async () => {
     const connection: MySqlDriverConnection = {
       query: vi.fn(async () => [[{ product_id: "P-001", updated_at: "2026-05-16 20:00:03" }], []]),

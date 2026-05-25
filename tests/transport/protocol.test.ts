@@ -15,7 +15,7 @@ import {
   ProtocolParseError
 } from "../../src/transport/protocol.js";
 import { buildProductBatch } from "../../src/poller/batch-builder.js";
-import { validMapping } from "../helpers/mapping.js";
+import { validMapping, validSnapshotMapping } from "../helpers/mapping.js";
 
 describe("transport protocol", () => {
   it("accepts a valid connector.config message", () => {
@@ -53,6 +53,26 @@ describe("transport protocol", () => {
       mapping: {
         mappingVersion: "mapping-v1",
         selectedProductTable: "products"
+      }
+    });
+  });
+
+  it("accepts a valid snapshot connector.config message", () => {
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "connector.config",
+          connectorId: "connector-1",
+          customerId: "customer-1",
+          mapping: validSnapshotMapping()
+        })
+      )
+    ).toMatchObject({
+      type: "connector.config",
+      mapping: {
+        syncMode: "snapshot",
+        snapshotQuery: "select * from products order by product_id limit ? offset ?",
+        snapshotPageSize: 500
       }
     });
   });

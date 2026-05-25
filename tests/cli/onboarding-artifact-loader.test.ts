@@ -69,6 +69,79 @@ describe("loadValidatedMappingFromOnboardingArtifactFile", () => {
     expect(mapping.fields.sourceUpdatedAt).toBe("updated_at");
   });
 
+  it("returns a validated snapshot mapping for a snapshot v1 artifact", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "onboard-loader-"));
+    tempDirs.push(dir);
+    const path = join(dir, "snapshot-onboarding.json");
+    await writeFile(
+      path,
+      `${JSON.stringify(
+        {
+          version: "1",
+          createdAt: "2026-05-18T12:00:00.000Z",
+          driver: "mysql",
+          databaseName: "pharmacy",
+          selectedProductTable: "products",
+          syncMode: "snapshot",
+          cursorField: "product_id",
+          cursorType: "number",
+          incrementalQuery: "",
+          batchSize: 500,
+          snapshotQuery: "select * from products order by product_id limit ? offset ?",
+          snapshotPageSize: 250,
+          fields: {
+            sourceProductCode: "product_id",
+            name: "description",
+            price: "sale_price",
+            stock: "stock_qty"
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const mapping = await loadValidatedMappingFromOnboardingArtifactFile(path);
+    expect(mapping.syncMode).toBe("snapshot");
+    expect(mapping.snapshotQuery).toBe("select * from products order by product_id limit ? offset ?");
+    expect(mapping.snapshotPageSize).toBe(250);
+  });
+
+  it("defaults syncMode to incremental when omitted from artifact", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "onboard-loader-"));
+    tempDirs.push(dir);
+    const path = join(dir, "incremental-default.json");
+    await writeFile(
+      path,
+      `${JSON.stringify(
+        {
+          version: "1",
+          createdAt: "2026-05-18T12:00:00.000Z",
+          driver: "mysql",
+          databaseName: "pharmacy",
+          selectedProductTable: "products",
+          cursorField: "updated_at",
+          cursorType: "timestamp",
+          incrementalQuery: "SELECT * FROM products WHERE updated_at > ?",
+          batchSize: 250,
+          fields: {
+            sourceProductCode: "product_id",
+            name: "description",
+            price: "sale_price",
+            stock: "stock_qty"
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const mapping = await loadValidatedMappingFromOnboardingArtifactFile(path);
+    expect(mapping.syncMode).toBe("incremental");
+  });
+
   it("throws a setup-first error when the artifact path is missing", async () => {
     const dir = await mkdtemp(join(tmpdir(), "onboard-loader-"));
     tempDirs.push(dir);

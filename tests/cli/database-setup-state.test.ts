@@ -44,6 +44,7 @@ describe("writeDatabaseSetupState", () => {
       driver: "mysql",
       databaseName: "pharmacy",
       selectedProductTable: "products",
+      syncMode: "incremental",
       cursorField: "updated_at",
       cursorType: "timestamp",
       incrementalQuery: "SELECT * FROM products WHERE updated_at > ? ORDER BY updated_at ASC LIMIT ?",
@@ -111,6 +112,42 @@ describe("writeDatabaseSetupState", () => {
     expect(artifact).toContain('"selectedProductTable": "PRODUTOS"');
     expect(artifact).toContain('"batchSize": 100');
     expect(artifact).not.toContain("super-secret");
+  });
+
+  it("persists snapshot sync fields when provided", async () => {
+    const artifactFilePath = await tempFilePath("snapshot-onboarding.json");
+
+    const artifact = await writeDatabaseSetupState({
+      artifactFilePath,
+      createdAt: "2026-05-18T14:00:00.000Z",
+      driver: "mysql",
+      databaseName: "pharmacy",
+      selectedProductTable: "products",
+      syncMode: "snapshot",
+      cursorField: "product_id",
+      cursorType: "number",
+      incrementalQuery: "",
+      batchSize: 500,
+      snapshotQuery: "select * from products order by product_id limit ? offset ?",
+      snapshotPageSize: 250,
+      fields: {
+        sourceProductCode: "product_id",
+        name: "description",
+        price: "sale_price",
+        stock: "stock_qty"
+      }
+    });
+
+    expect(artifact).toMatchObject({
+      syncMode: "snapshot",
+      snapshotQuery: "select * from products order by product_id limit ? offset ?",
+      snapshotPageSize: 250
+    });
+
+    const serialized = await readFile(artifactFilePath, "utf8");
+    expect(serialized).toContain('"syncMode": "snapshot"');
+    expect(serialized).toContain('"snapshotQuery": "select * from products order by product_id limit ? offset ?"');
+    expect(serialized).toContain('"snapshotPageSize": 250');
   });
 });
 

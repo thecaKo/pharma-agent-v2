@@ -447,15 +447,14 @@ function parseAdminCommand(value: unknown): AdminCommand {
 function parseMapping(value: unknown): ValidatedMappingConfig {
   const mapping = expectRecord(value, "mapping");
   const fields = expectRecord(mapping.fields, "mapping.fields");
+  const syncMode = parseSyncMode(mapping.syncMode);
 
-  return {
+  const base = {
     mappingVersion: expectString(mapping.mappingVersion, "mapping.mappingVersion"),
     selectedProductTable: optionalString(mapping.selectedProductTable, "mapping.selectedProductTable"),
+    syncMode,
     pollIntervalMs: expectPositiveInteger(mapping.pollIntervalMs, "mapping.pollIntervalMs"),
     batchSize: expectPositiveInteger(mapping.batchSize, "mapping.batchSize"),
-    incrementalQuery: expectString(mapping.incrementalQuery, "mapping.incrementalQuery"),
-    cursorField: expectString(mapping.cursorField, "mapping.cursorField"),
-    cursorType: parseCursorType(mapping.cursorType),
     fields: {
       sourceProductCode: expectString(fields.sourceProductCode, "mapping.fields.sourceProductCode"),
       name: expectString(fields.name, "mapping.fields.name"),
@@ -466,6 +465,34 @@ function parseMapping(value: unknown): ValidatedMappingConfig {
       sourceUpdatedAt: optionalString(fields.sourceUpdatedAt, "mapping.fields.sourceUpdatedAt")
     }
   };
+
+  if (syncMode === "snapshot") {
+    return {
+      ...base,
+      syncMode: "snapshot",
+      snapshotQuery: expectString(mapping.snapshotQuery, "mapping.snapshotQuery"),
+      snapshotPageSize: expectPositiveInteger(mapping.snapshotPageSize, "mapping.snapshotPageSize")
+    };
+  }
+
+  return {
+    ...base,
+    syncMode: "incremental",
+    incrementalQuery: expectString(mapping.incrementalQuery, "mapping.incrementalQuery"),
+    cursorField: expectString(mapping.cursorField, "mapping.cursorField"),
+    cursorType: parseCursorType(mapping.cursorType)
+  };
+}
+
+function parseSyncMode(value: unknown): "incremental" | "snapshot" {
+  if (value === undefined || value === null) {
+    return "incremental";
+  }
+  const syncMode = expectString(value, "mapping.syncMode");
+  if (syncMode !== "incremental" && syncMode !== "snapshot") {
+    throw new ProtocolParseError(`mapping.syncMode must be "incremental" or "snapshot", got "${syncMode}"`);
+  }
+  return syncMode;
 }
 
 function parseCursorType(value: unknown): "timestamp" | "number" {

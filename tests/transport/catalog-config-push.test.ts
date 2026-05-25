@@ -11,8 +11,10 @@ describe("catalog config push normalization", () => {
       ...push,
       mapping: {
         ...(push.mapping as Record<string, unknown>),
+        syncMode: "incremental",
         pollIntervalMs: 10_000,
-        batchSize: 500
+        batchSize: 500,
+        snapshotPageSize: 500
       }
     });
   });
@@ -153,6 +155,47 @@ LIMIT ?`,
 
   it("leaves flat production connector.config unchanged", () => {
     const flat = productionConnectorConfig();
-    expect(normalizeCatalogConfigPushMessage(flat)).toEqual(flat);
+    expect(normalizeCatalogConfigPushMessage(flat)).toEqual({
+      ...flat,
+      mapping: {
+        ...(flat.mapping as Record<string, unknown>),
+        syncMode: "incremental",
+        pollIntervalMs: 10_000,
+        batchSize: 500,
+        snapshotPageSize: 500
+      }
+    });
+  });
+
+  it("passes through snapshot sync fields from nested catalog payloads", () => {
+    const push = {
+      type: "connector.config",
+      config: {
+        connectorId: "connector-1",
+        customerId: "customer-1",
+        selectedProductTable: "products",
+        fields: {
+          sourceProductCode: "product_id",
+          sourceProductName: "description",
+          sourceProductPrice: "sale_price",
+          sourceProductStock: "stock_qty"
+        },
+        mapping: {
+          mappingVersion: "mv-snapshot-1",
+          syncMode: "snapshot",
+          snapshotQuery: "select * from products order by product_id limit ? offset ?",
+          snapshotPageSize: 500,
+          pollIntervalMs: 10,
+          batchSize: 100
+        }
+      }
+    };
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({
+      syncMode: "snapshot",
+      snapshotQuery: "select * from products order by product_id limit ? offset ?",
+      snapshotPageSize: 500
+    });
   });
 });

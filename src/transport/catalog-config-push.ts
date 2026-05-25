@@ -1,4 +1,4 @@
-import type { CursorType } from "../mapping/types.js";
+import type { CursorType, SyncMode } from "../mapping/types.js";
 
 const CATALOG_FIELD_TO_AGENT: Readonly<Record<string, keyof AgentFieldMapping>> = {
   sourceProductCode: "sourceProductCode",
@@ -56,6 +56,10 @@ export function normalizeCatalogConfigPushMessage(message: Record<string, unknow
 
   const incrementalQuery =
     typeof catalogMapping.incrementalQuery === "string" ? catalogMapping.incrementalQuery.trim() : "";
+  const syncMode = resolveSyncMode(catalog, catalogMapping);
+  const snapshotQuery =
+    typeof catalogMapping.snapshotQuery === "string" ? catalogMapping.snapshotQuery.trim() : "";
+  const snapshotPageSize = normalizeRuntimeNumber(catalogMapping.snapshotPageSize, CATALOG_BATCH_SIZE);
   const catalogFields = readCatalogFields(catalog.fields);
   const usesAliasedSelect = ALIASED_QUERY_MARKER.test(incrementalQuery);
   const fields = buildAgentFields(catalogFields, usesAliasedSelect);
@@ -76,11 +80,14 @@ export function normalizeCatalogConfigPushMessage(message: Record<string, unknow
     mapping: {
       mappingVersion: catalogMapping.mappingVersion,
       selectedProductTable: catalog.selectedProductTable,
+      syncMode,
       pollIntervalMs: normalizeRuntimeNumber(catalogMapping.pollIntervalMs, CATALOG_POLL_INTERVAL_MS),
       batchSize: normalizeRuntimeNumber(catalogMapping.batchSize, CATALOG_BATCH_SIZE),
       incrementalQuery,
       cursorField,
       cursorType,
+      snapshotQuery,
+      snapshotPageSize,
       fields
     }
   };
@@ -92,10 +99,17 @@ function normalizeFlatConnectorConfigMessage(message: Record<string, unknown>): 
     ...message,
     mapping: {
       ...mapping,
+      syncMode: resolveSyncMode({}, mapping),
       pollIntervalMs: normalizeRuntimeNumber(mapping.pollIntervalMs, CATALOG_POLL_INTERVAL_MS),
-      batchSize: normalizeRuntimeNumber(mapping.batchSize, CATALOG_BATCH_SIZE)
+      batchSize: normalizeRuntimeNumber(mapping.batchSize, CATALOG_BATCH_SIZE),
+      snapshotPageSize: normalizeRuntimeNumber(mapping.snapshotPageSize, CATALOG_BATCH_SIZE)
     }
   };
+}
+
+function resolveSyncMode(catalog: Record<string, unknown>, catalogMapping: Record<string, unknown>): SyncMode {
+  const raw = readNonEmptyString(catalogMapping.syncMode) ?? readNonEmptyString(catalog.syncMode) ?? "";
+  return raw === "snapshot" ? "snapshot" : "incremental";
 }
 
 function normalizeRuntimeNumber(value: unknown, normalizedValue: number): unknown {

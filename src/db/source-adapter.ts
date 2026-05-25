@@ -7,6 +7,12 @@ export interface QueryChangesInput {
   limit: number;
 }
 
+export interface QuerySnapshotPageInput {
+  sql: string;
+  limit: number;
+  offset: number;
+}
+
 export interface DatabaseTable {
   name: string;
 }
@@ -21,6 +27,7 @@ export interface SourceDatabaseAdapter {
   connect(): Promise<void>;
   close(): Promise<void>;
   queryChanges(input: QueryChangesInput): Promise<SourceRow[]>;
+  querySnapshotPage(input: QuerySnapshotPageInput): Promise<SourceRow[]>;
   listTables(): Promise<DatabaseTable[]>;
   listColumns(tableName: string): Promise<DatabaseColumn[]>;
 }

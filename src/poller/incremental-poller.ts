@@ -1,6 +1,6 @@
 import type { Logger } from "../logging/logger.js";
 import { applyMapping } from "../mapping/apply.js";
-import type { MappingConfig, SourceRow, ValidatedMappingConfig } from "../mapping/types.js";
+import type { MappingConfig, SourceRow, ValidatedIncrementalMappingConfig, ValidatedMappingConfig } from "../mapping/types.js";
 import { validateMappingConfig } from "../mapping/validate.js";
 import type { ConnectorState, CursorValue } from "../state/state-types.js";
 import { buildProductBatch, type ProductChangeBatch } from "./batch-builder.js";
@@ -68,9 +68,13 @@ export class IncrementalPoller {
   }
 
   public async pollOnce(): Promise<PollCycleResult> {
-    let mapping: ValidatedMappingConfig;
+    let mapping: ValidatedIncrementalMappingConfig;
     try {
-      mapping = validateMappingConfig(this.mapping);
+      const validated = validateMappingConfig(this.mapping);
+      if (validated.syncMode !== "incremental") {
+        throw new Error("Incremental poller requires incremental sync mode");
+      }
+      mapping = validated;
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error("Invalid mapping configuration");
       this.logger?.warn("poll skipped invalid mapping", {
@@ -141,7 +145,7 @@ export class IncrementalPoller {
     return this.buildResult(rows, mapping, cursorBefore);
   }
 
-  private buildResult(rows: SourceRow[], mapping: ValidatedMappingConfig, cursorBefore: CursorValue): PollCycleResult {
+  private buildResult(rows: SourceRow[], mapping: ValidatedIncrementalMappingConfig, cursorBefore: CursorValue): PollCycleResult {
     const mapped = applyMapping(rows, mapping, {
       logger: this.logger,
       logContext: {
@@ -194,6 +198,6 @@ export class IncrementalPoller {
   }
 }
 
-function initialCursorValue(cursorType: ValidatedMappingConfig["cursorType"]): CursorValue {
+function initialCursorValue(cursorType: ValidatedIncrementalMappingConfig["cursorType"]): CursorValue {
   return cursorType === "number" ? 0 : "1970-01-01T00:00:00.000Z";
 }

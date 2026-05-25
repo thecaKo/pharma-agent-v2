@@ -2,7 +2,7 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
-import type { DatabaseColumn, DatabaseTable, QueryChangesInput, SourceDatabaseAdapter } from "./source-adapter.js";
+import type { DatabaseColumn, DatabaseTable, QueryChangesInput, QuerySnapshotPageInput, SourceDatabaseAdapter } from "./source-adapter.js";
 
 export interface MySqlConnectionConfig {
   host: string;
@@ -80,6 +80,22 @@ export class MySqlSourceAdapter implements SourceDatabaseAdapter {
 
     try {
       const result = await connection.query(input.sql, [normalizeCursorParam(input.cursor), input.limit]);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "mysql",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async querySnapshotPage(input: QuerySnapshotPageInput): Promise<SourceRow[]> {
+    const connection = this.requireConnection();
+
+    try {
+      const result = await connection.query(input.sql, [input.limit, input.offset]);
       return normalizeRows(result);
     } catch (error) {
       throw normalizeDatabaseError({

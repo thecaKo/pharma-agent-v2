@@ -44,3 +44,24 @@ export function validMapping(overrides: Partial<MappingConfig> = {}): MappingCon
     ...overrides
   };
 }
+
+export function validSnapshotMapping(overrides: Partial<MappingConfig> = {}): MappingConfig {
+  return {
+    mappingVersion: "mapping-v1",
+    selectedProductTable: "products",
+    syncMode: "snapshot",
+    pollIntervalMs: 10_000,
+    batchSize: 500,
+    snapshotQuery: "select * from products order by product_id limit ? offset ?",
+    snapshotPageSize: 500,
+    fields: {
+      sourceProductCode: "product_id",
+      name: "description",
+      barcode: "ean",
+      price: "sale_price",
+      stock: "quantity",
+      active: "is_active"
+    },
+    ...overrides
+  };
+}

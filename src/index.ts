@@ -125,6 +125,12 @@ export {
   type PollCycleStatus,
   type PollerStateReader
 } from "./poller/incremental-poller.js";
+export { diffSnapshotProducts } from "./poller/snapshot-diff.js";
+export { productSnapshotHash, snapshotFieldsSignature } from "./poller/snapshot-hash.js";
+export {
+  SnapshotPoller,
+  type SnapshotPollCycleResult
+} from "./poller/snapshot-poller.js";
 export {
   ConnectorRuntime,
   defaultStateFilePath,

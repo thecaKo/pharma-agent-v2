@@ -96,6 +96,16 @@ Use only when the WiX installer cannot run. See `docs/windows-service.md` (**Pow
 4. Return an accepted `batch.ack`.
 5. Confirm `%PROGRAMDATA%\PharmaAgentConnector\connector-state.json` advances `lastAckedCursor` only after the acknowledgement and updates `lastSuccessfulSendAt`.
 
+### Snapshot product change smoke
+
+1. Publish a `connector.config` with `syncMode: "snapshot"` and a stable `snapshotQuery`.
+2. Let the connector send the initial `product.batch`.
+3. Return an accepted `batch.ack`.
+4. Change only the source product price in the ERP, without changing any update timestamp.
+5. Wait for the next polling cycle.
+6. Confirm the next `product.batch` includes the changed product with the new price.
+7. Confirm a removed product is not sent as inactive automatically.
+
 ## Production Central Panel Config Push Smoke
 
 Use this checklist at customer go-live when validating mapping pushed from the **central panel** (neo-api complete `connector.config` payload). This is the production path. Do **not** substitute **`npm run mock-panel -- serve`** here—that flow is a **development/simulator-only** path documented in **Mock Panel CLI Flow** and does not prove panel-owned config delivery.

@@ -1,5 +1,6 @@
 import type { CursorValue } from "../state/state-types.js";
 
+export type SyncMode = "incremental" | "snapshot";
 export type CursorType = "timestamp" | "number";
 export type SourceRow = Record<string, unknown>;
 
@@ -16,25 +17,41 @@ export interface ProductFieldMappings {
 export interface MappingConfig {
   mappingVersion?: string;
   selectedProductTable?: string;
+  syncMode?: SyncMode;
   pollIntervalMs?: number;
   batchSize?: number;
   incrementalQuery?: string;
   cursorField?: string;
   cursorType?: string;
+  snapshotQuery?: string;
+  snapshotPageSize?: number;
   fields?: ProductFieldMappings;
 }
 
-export interface ValidatedMappingConfig {
+interface ValidatedMappingBase {
   mappingVersion: string;
   selectedProductTable?: string;
+  syncMode: SyncMode;
   pollIntervalMs: number;
   batchSize: number;
-  incrementalQuery: string;
-  cursorField: string;
-  cursorType: CursorType;
   fields: Required<Pick<ProductFieldMappings, "sourceProductCode" | "name">> &
     Pick<ProductFieldMappings, "price" | "stock" | "barcode" | "active" | "sourceUpdatedAt">;
 }
+
+export interface ValidatedIncrementalMappingConfig extends ValidatedMappingBase {
+  syncMode: "incremental";
+  incrementalQuery: string;
+  cursorField: string;
+  cursorType: CursorType;
+}
+
+export interface ValidatedSnapshotMappingConfig extends ValidatedMappingBase {
+  syncMode: "snapshot";
+  snapshotQuery: string;
+  snapshotPageSize: number;
+}
+
+export type ValidatedMappingConfig = ValidatedIncrementalMappingConfig | ValidatedSnapshotMappingConfig;
 
 export interface ProductChangeRecord {
   sourceProductCode: string;

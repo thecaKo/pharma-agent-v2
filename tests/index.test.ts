@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { classifyDatabasePath, CONNECTOR_VERSION, createLogger, loadConfig, redactValue } from "../src/index.js";
+import {
+  classifyDatabasePath,
+  CONNECTOR_VERSION,
+  createLogger,
+  diffSnapshotProducts,
+  loadConfig,
+  productSnapshotHash,
+  redactValue,
+  SnapshotPoller,
+  snapshotFieldsSignature
+} from "../src/index.js";
 import { validEnv } from "./helpers/env.js";
 
 describe("public connector exports", () => {
@@ -12,5 +22,9 @@ describe("public connector exports", () => {
       type: "firebird",
       confidence: "high"
     });
+    expect(SnapshotPoller).toBeTypeOf("function");
+    expect(productSnapshotHash).toBeTypeOf("function");
+    expect(snapshotFieldsSignature).toBeTypeOf("function");
+    expect(diffSnapshotProducts).toBeTypeOf("function");
   });
 });

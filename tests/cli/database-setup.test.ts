@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildIncrementalReadTestQuery,
+  buildSnapshotReadTestQuery,
   connectWithRetry,
   connectionDefaults,
   discoveryConnectionSource,
@@ -205,6 +206,15 @@ describe("database setup helpers", () => {
     );
     expect(buildIncrementalReadTestQuery("firebird", "PRODUTOS", "UPDATED_AT")).toBe(
       'select * from "PRODUTOS" where "UPDATED_AT" > ? order by "UPDATED_AT" rows ?'
+    );
+  });
+
+  it("builds MySQL and Firebird snapshot read test queries with driver-compatible pagination", () => {
+    expect(buildSnapshotReadTestQuery("mysql", "products", "product_id")).toBe(
+      "select * from `products` order by `product_id` limit ? offset ?"
+    );
+    expect(buildSnapshotReadTestQuery("firebird", "PRODUCTS", "PRODUCT_ID")).toBe(
+      'select * from "PRODUCTS" order by "PRODUCT_ID" rows ? to ?'
     );
   });
 
@@ -1326,6 +1336,7 @@ function createAdapter(overrides: Partial<SourceDatabaseAdapter> = {}): SourceDa
     listTables: vi.fn(async () => tables),
     listColumns: vi.fn(async () => columns),
     queryChanges: vi.fn(async () => [{ product_id: "P-001" }]),
+    querySnapshotPage: vi.fn(async () => []),
     ...overrides
   };
 }

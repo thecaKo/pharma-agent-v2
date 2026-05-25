@@ -88,6 +88,7 @@ describe("source adapter fixture integrations", () => {
       connect: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
       queryChanges: vi.fn(async () => fixtureRows),
+      querySnapshotPage: vi.fn(async () => []),
       listTables: vi.fn(async () => [{ name: "products" }]),
       listColumns: vi.fn(async () => [
         { name: "product_id", dataType: "varchar", nullable: false },

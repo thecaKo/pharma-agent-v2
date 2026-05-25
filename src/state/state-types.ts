@@ -1,6 +1,24 @@
-import type { MappingConfig } from "../mapping/types.js";
+import type { MappingConfig, ProductChangeRecord } from "../mapping/types.js";
 
 export type CursorValue = string | number | null;
+
+export interface SnapshotProductState {
+  hash: string;
+  lastSeenAt: string;
+  lastConfirmedAt: string;
+}
+
+export interface PendingSnapshotProduct {
+  sourceProductCode: string;
+  hash: string;
+  record: ProductChangeRecord;
+}
+
+export interface SnapshotState {
+  fieldsSignature: string;
+  products: Record<string, SnapshotProductState>;
+  pending: PendingSnapshotProduct[];
+}
 
 export interface ConnectorState {
   connectorId?: string;
@@ -14,6 +32,7 @@ export interface ConnectorState {
   lastAckedCursor?: CursorValue;
   lastSuccessfulSendAt?: string;
   lastBatchId?: string;
+  snapshotState?: SnapshotState;
 }
 
 export const STATE_FILE_NAME = "connector-state.json";

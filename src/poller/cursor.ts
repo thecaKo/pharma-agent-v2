@@ -1,7 +1,7 @@
-import type { SourceRow, ValidatedMappingConfig } from "../mapping/types.js";
+import type { SourceRow, ValidatedIncrementalMappingConfig } from "../mapping/types.js";
 import type { CursorValue } from "../state/state-types.js";
 
-export function readRowCursor(row: SourceRow, mapping: ValidatedMappingConfig): CursorValue {
+export function readRowCursor(row: SourceRow, mapping: ValidatedIncrementalMappingConfig): CursorValue {
   const value = row[mapping.cursorField];
   if (value === undefined || value === null || value === "") {
     return null;
@@ -11,7 +11,7 @@ export function readRowCursor(row: SourceRow, mapping: ValidatedMappingConfig): 
 
 export function selectCursorAfter(
   rows: readonly SourceRow[],
-  mapping: ValidatedMappingConfig,
+  mapping: ValidatedIncrementalMappingConfig,
   fallback: CursorValue
 ): CursorValue {
   let cursorAfter = fallback;

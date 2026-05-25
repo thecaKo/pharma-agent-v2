@@ -1,7 +1,8 @@
 import type { ConfigValidationIssue } from "../config/types.js";
-import type { MappingConfig, ValidatedMappingConfig } from "./types.js";
+import type { MappingConfig, SyncMode, ValidatedMappingConfig } from "./types.js";
 
 const REQUIRED_FIELDS = ["sourceProductCode", "name"] as const;
+const SYNC_MODES = new Set(["incremental", "snapshot"]);
 const CURSOR_TYPES = new Set(["timestamp", "number"]);
 
 export class MappingValidationError extends Error {
@@ -16,19 +17,27 @@ export class MappingValidationError extends Error {
 
 export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingConfig {
   const issues: ConfigValidationIssue[] = [];
+  const syncMode = normalizeSyncMode(mapping.syncMode, issues);
 
   requireString(mapping.mappingVersion, "mappingVersion", issues);
   requirePositiveInteger(mapping.pollIntervalMs, "pollIntervalMs", issues);
   requirePositiveInteger(mapping.batchSize, "batchSize", issues);
-  requireString(mapping.incrementalQuery, "incrementalQuery", issues);
-  requireString(mapping.cursorField, "cursorField", issues);
-
-  if (!mapping.cursorType || !CURSOR_TYPES.has(mapping.cursorType)) {
-    issues.push({ field: "cursorType", message: "must be timestamp or number" });
-  }
 
   for (const field of REQUIRED_FIELDS) {
     requireString(mapping.fields?.[field], `fields.${field}`, issues);
+  }
+
+  if (syncMode === "incremental") {
+    requireString(mapping.incrementalQuery, "incrementalQuery", issues);
+    requireString(mapping.cursorField, "cursorField", issues);
+    if (!mapping.cursorType || !CURSOR_TYPES.has(mapping.cursorType)) {
+      issues.push({ field: "cursorType", message: "must be timestamp or number" });
+    }
+  }
+
+  if (syncMode === "snapshot") {
+    requireString(mapping.snapshotQuery, "snapshotQuery", issues);
+    requirePositiveInteger(mapping.snapshotPageSize, "snapshotPageSize", issues);
   }
 
   if (issues.length > 0) {
@@ -36,15 +45,12 @@ export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingC
   }
 
   const selectedProductTable = normalizeOptionalMapping(mapping.selectedProductTable);
-
-  return {
+  const base = {
     mappingVersion: mapping.mappingVersion?.trim() as string,
     ...(selectedProductTable ? { selectedProductTable } : {}),
+    syncMode,
     pollIntervalMs: mapping.pollIntervalMs as number,
     batchSize: mapping.batchSize as number,
-    incrementalQuery: mapping.incrementalQuery?.trim() as string,
-    cursorField: mapping.cursorField?.trim() as string,
-    cursorType: mapping.cursorType as "timestamp" | "number",
     fields: {
       sourceProductCode: mapping.fields?.sourceProductCode?.trim() as string,
       name: mapping.fields?.name?.trim() as string,
@@ -55,6 +61,34 @@ export function validateMappingConfig(mapping: MappingConfig): ValidatedMappingC
       sourceUpdatedAt: normalizeOptionalMapping(mapping.fields?.sourceUpdatedAt)
     }
   };
+
+  if (syncMode === "snapshot") {
+    return {
+      ...base,
+      syncMode: "snapshot",
+      snapshotQuery: mapping.snapshotQuery?.trim() as string,
+      snapshotPageSize: mapping.snapshotPageSize as number
+    };
+  }
+
+  return {
+    ...base,
+    syncMode: "incremental",
+    incrementalQuery: mapping.incrementalQuery?.trim() as string,
+    cursorField: mapping.cursorField?.trim() as string,
+    cursorType: mapping.cursorType as "timestamp" | "number"
+  };
+}
+
+function normalizeSyncMode(value: MappingConfig["syncMode"], issues: ConfigValidationIssue[]): SyncMode {
+  if (value === undefined) {
+    return "incremental";
+  }
+  if (!SYNC_MODES.has(value)) {
+    issues.push({ field: "syncMode", message: "must be incremental or snapshot" });
+    return "incremental";
+  }
+  return value;
 }
 
 function requireString(value: string | undefined, field: string, issues: ConfigValidationIssue[]): void {

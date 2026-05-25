@@ -10,6 +10,7 @@ function adapterWithRows(rows: Record<string, unknown>[] = []): SourceDatabaseAd
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     queryChanges: vi.fn(async () => rows),
+    querySnapshotPage: vi.fn(async () => []),
     listTables: vi.fn(async () => [{ name: "products" }]),
     listColumns: vi.fn(async () => [])
   };

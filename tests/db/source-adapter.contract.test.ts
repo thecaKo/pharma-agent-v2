@@ -5,6 +5,7 @@ class ContractAdapter implements SourceDatabaseAdapter {
   public readonly connect = vi.fn(async () => undefined);
   public readonly close = vi.fn(async () => undefined);
   public readonly queryChanges = vi.fn(async () => [{ product_id: "P-001", updated_at: "2026-05-16T20:00:00.000Z" }]);
+  public readonly querySnapshotPage = vi.fn(async () => []);
   public readonly listTables = vi.fn(async () => [{ name: "products" }]);
   public readonly listColumns = vi.fn(async () => [{ name: "product_id", dataType: "varchar", nullable: false }]);
 }

@@ -1,7 +1,7 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DatabaseDriver } from "../config/types.js";
-import type { ProductFieldMappings } from "../mapping/types.js";
+import type { ProductFieldMappings, SyncMode } from "../mapping/types.js";
 
 export type OnboardingFieldMapping = Required<Pick<ProductFieldMappings, "sourceProductCode" | "name" | "price" | "stock">> &
   Pick<ProductFieldMappings, "barcode" | "active" | "sourceUpdatedAt">;
@@ -12,10 +12,13 @@ export interface OnboardingMappingArtifact {
   driver: DatabaseDriver;
   databaseName: string;
   selectedProductTable: string;
+  syncMode: SyncMode;
   cursorField: string;
   cursorType: "timestamp" | "number";
   incrementalQuery: string;
   batchSize: number;
+  snapshotQuery?: string;
+  snapshotPageSize?: number;
   fields: OnboardingFieldMapping;
 }
 
@@ -24,10 +27,13 @@ export interface DatabaseSetupStateInput {
   driver: DatabaseDriver;
   databaseName: string;
   selectedProductTable: string;
+  syncMode?: SyncMode;
   cursorField: string;
   cursorType: "timestamp" | "number";
   incrementalQuery: string;
   batchSize: number;
+  snapshotQuery?: string;
+  snapshotPageSize?: number;
   fields: OnboardingFieldMapping;
   createdAt?: Date | string;
   connectorToken?: string;
@@ -63,10 +69,13 @@ export function buildOnboardingMappingArtifact(input: DatabaseSetupStateInput): 
     driver: input.driver,
     databaseName: input.databaseName,
     selectedProductTable: input.selectedProductTable,
+    syncMode: input.syncMode ?? "incremental",
     cursorField: input.cursorField,
     cursorType: input.cursorType,
     incrementalQuery: input.incrementalQuery,
     batchSize: input.batchSize,
+    snapshotQuery: input.snapshotQuery,
+    snapshotPageSize: input.snapshotPageSize,
     fields: pickArtifactFields(input.fields)
   };
 }

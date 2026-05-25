@@ -26,7 +26,7 @@ import {
   type FileDiscoveryScanResultMessage
 } from "../../src/transport/file-discovery-ws.js";
 import { validEnv } from "../helpers/env.js";
-import { validMapping } from "../helpers/mapping.js";
+import { validMapping, validSnapshotMapping } from "../helpers/mapping.js";
 
 describe("ConnectorRuntime", () => {
   it("fails fast when startup configuration validation fails", () => {
@@ -142,6 +142,40 @@ describe("ConnectorRuntime", () => {
 
     expect(adapter.connect).toHaveBeenCalledOnce();
     expect(timers.callbacks).toHaveLength(1);
+  });
+
+  it("snapshot mode persists confirmed hashes only after accepted ack", async () => {
+    const stateStore = await tempStateStore();
+    const transport = new FakeTransport();
+    const adapter = adapterWithRows([]);
+    adapter.querySnapshotPage = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { product_id: "P-001", description: "Dipirona", sale_price: "12.50", quantity: "7" }
+      ])
+      .mockResolvedValueOnce([]);
+
+    const runtime = createRuntime({ transport, stateStore, adapter });
+
+    await runtime.start();
+    transport.emitConfig(configMessage({ mapping: validSnapshotMapping({ snapshotPageSize: 500, batchSize: 500 }) }));
+    await waitUntil(() => runtime.getState().activeMapping?.mappingVersion === "mapping-v1");
+    await runtime.pollOnceForTest();
+
+    const batch = transport.sentBatches[0]!;
+    expect(batch.records[0]?.sourceProductCode).toBe("P-001");
+    await expect(stateStore.load()).resolves.not.toHaveProperty("snapshotState.products.P-001");
+
+    transport.emitAck({
+      type: "batch.ack",
+      batchId: batch.batchId,
+      accepted: true,
+      acceptedRecordCount: 1,
+      rejectedRecordCount: 0,
+      nextAction: "continue"
+    });
+
+    await waitUntil(async () => Boolean((await stateStore.load()).snapshotState?.products["P-001"]));
   });
 
   it("accepted batch.ack advances lastAckedCursor and updates lastSuccessfulSendAt", async () => {
@@ -858,6 +892,7 @@ describe("ConnectorRuntime", () => {
       }),
       close: vi.fn(async () => undefined),
       queryChanges: vi.fn(async () => []),
+      querySnapshotPage: vi.fn(async () => []),
       listTables: vi.fn(async () => [{ name: "products" }]),
       listColumns: vi.fn(async () => [])
     };
@@ -1012,6 +1047,7 @@ function adapterWithRows(rows: Record<string, unknown>[]): SourceDatabaseAdapter
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     queryChanges: vi.fn(async () => rows),
+    querySnapshotPage: vi.fn(async () => []),
     listTables: vi.fn(async () => [{ name: "products" }]),
     listColumns: vi.fn(async () => [])
   };
@@ -1026,6 +1062,7 @@ function adapterWithTables(
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     queryChanges: vi.fn(async () => []),
+    querySnapshotPage: vi.fn(async () => []),
     listColumns: vi.fn(async () => columns),
     listTables: vi.fn(async () => {
       if (listTablesError) {

@@ -406,6 +406,18 @@ export function buildIncrementalReadTestQuery(
   return `select * from ${quotedTable} where ${quotedCursor} > ? order by ${quotedCursor} ${limitClause}`;
 }
 
+export function buildSnapshotReadTestQuery(
+  driver: DatabaseDriver,
+  tableName: string,
+  stableOrderField: string
+): string {
+  const quotedTable = quoteIdentifier(driver, tableName);
+  const quotedOrder = quoteIdentifier(driver, stableOrderField);
+  return driver === "mysql"
+    ? `select * from ${quotedTable} order by ${quotedOrder} limit ? offset ?`
+    : `select * from ${quotedTable} order by ${quotedOrder} rows ? to ?`;
+}
+
 export function discoveryConnectionSource(candidate: DatabaseSetupCandidateView): DatabaseSetupConnectionSource {
   return {
     mode: "discovery",

@@ -21,7 +21,7 @@ import { CATALOG_MAPPING_PREVIEW_RESULT_TYPE } from "../../src/transport/mapping
 import { CONFIG_VALIDATION_FAILED_ERROR_CODE } from "../../src/transport/protocol.js";
 import { validEnv } from "../helpers/env.js";
 import { neoApiCatalogConfigPush } from "../helpers/catalog-config-push.js";
-import { productionConnectorConfig, validMapping } from "../helpers/mapping.js";
+import { productionConnectorConfig, validMapping, validSnapshotMapping } from "../helpers/mapping.js";
 import { MockWebSocketServer, waitFor } from "../support/mock-ws-server.js";
 
 describe("connector runtime flow", () => {
@@ -324,6 +324,90 @@ describe("connector runtime flow", () => {
     expect(state.lastSuccessfulSendAt).toBe("2026-05-16T20:00:01.000Z");
   });
 
+  it("snapshot mode sends price changes without updated_at cursor movement", async () => {
+    const adapter = adapterWithSchema(
+      [],
+      [{ name: "products" }],
+      [
+        { name: "product_id" },
+        { name: "description" },
+        { name: "sale_price" },
+        { name: "quantity" }
+      ]
+    );
+    adapter.querySnapshotPage = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { product_id: "P-001", description: "Dipirona", sale_price: "12.50", quantity: "7" }
+      ])
+      .mockResolvedValueOnce([
+        { product_id: "P-001", description: "Dipirona", sale_price: "13.90", quantity: "7" }
+      ]);
+
+    runtime = createRuntime({ adapter });
+    await runtime.start();
+    server.sendJson({
+      type: "connector.config",
+      connectorId: "connector-1",
+      customerId: "customer-1",
+      mapping: validSnapshotMapping()
+    });
+
+    const firstBatchMessage = await nextProductBatch(server);
+    expect(firstBatchMessage.parsed).toMatchObject({
+      type: "product.batch",
+      mappingVersion: "mapping-v1",
+      cursor: {
+        before: null,
+        after: null
+      }
+    });
+    expect((firstBatchMessage.parsed as { products: unknown[] }).products).toMatchObject([
+      {
+        code: "P-001",
+        name: "Dipirona",
+        salePrice: 12.5,
+        stockQuantity: 7
+      }
+    ]);
+
+    server.sendJson({
+      type: "batch.ack",
+      batchId: (firstBatchMessage.parsed as { batchId: string }).batchId,
+      accepted: true,
+      acceptedRecordCount: 1,
+      rejectedRecordCount: 0,
+      nextAction: "continue"
+    });
+
+    await waitUntilState(stateFilePath, (state) =>
+      Boolean((state.snapshotState as { products?: Record<string, unknown> } | undefined)?.products?.["P-001"])
+    );
+
+    await runtime.pollOnceForTest();
+
+    const secondBatchMessage = await nextProductBatch(server);
+    expect(secondBatchMessage.parsed).toMatchObject({
+      type: "product.batch",
+      mappingVersion: "mapping-v1",
+      cursor: {
+        before: null,
+        after: null
+      }
+    });
+    expect((secondBatchMessage.parsed as { products: unknown[] }).products).toMatchObject([
+      {
+        code: "P-001",
+        name: "Dipirona",
+        salePrice: 13.9,
+        stockQuantity: 7
+      }
+    ]);
+
+    const state = JSON.parse(await readFile(stateFilePath, "utf8")) as Record<string, unknown>;
+    expect(state.lastAckedCursor).toBeNull();
+  });
+
   it("sends one product batch from mock database and accepted ack advances cursor", async () => {
     runtime = createRuntime({
       adapter: adapterWithRows([
@@ -610,6 +694,7 @@ function adapterWithSchema(
     connect: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     queryChanges: vi.fn(async () => rows),
+    querySnapshotPage: vi.fn(async () => []),
     listTables: vi.fn(async () => tables),
     listColumns: vi.fn(async () => columns)
   };

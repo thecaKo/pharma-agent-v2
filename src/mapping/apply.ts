@@ -21,11 +21,15 @@ export function applyMapping(
   const records: ProductChangeRecord[] = [];
   const rejected: RejectedSourceRow[] = [];
   let cursorAfter: CursorValue = null;
+  const cursorField = mapping.syncMode === "incremental" ? mapping.cursorField : undefined;
+  const cursorType = mapping.syncMode === "incremental" ? mapping.cursorType : undefined;
 
   rows.forEach((row, index) => {
-    const mappedCursor = readCursor(row, mapping.cursorField, mapping.cursorType);
-    if (mappedCursor !== null) {
-      cursorAfter = mappedCursor;
+    if (cursorField && cursorType) {
+      const mappedCursor = readCursor(row, cursorField, cursorType);
+      if (mappedCursor !== null) {
+        cursorAfter = mappedCursor;
+      }
     }
 
     const sourceProductCode = normalizeString(row[mapping.fields.sourceProductCode]);
@@ -40,6 +44,12 @@ export function applyMapping(
       return;
     }
 
+    const sourceUpdatedAtValue = mapping.fields.sourceUpdatedAt
+      ? row[mapping.fields.sourceUpdatedAt] ?? (cursorField ? row[cursorField] : undefined)
+      : cursorField
+        ? row[cursorField]
+        : undefined;
+
     records.push({
       sourceProductCode,
       name: normalizeString(row[mapping.fields.name]) ?? "",
@@ -47,12 +57,7 @@ export function applyMapping(
       price: mapping.fields.price ? toNumber(row[mapping.fields.price]) : null,
       stock: mapping.fields.stock ? toNumber(row[mapping.fields.stock]) : null,
       ...optionalBooleanProperty("active", mapping.fields.active ? row[mapping.fields.active] : undefined),
-      ...optionalStringProperty(
-        "sourceUpdatedAt",
-        mapping.fields.sourceUpdatedAt
-          ? row[mapping.fields.sourceUpdatedAt] ?? row[mapping.cursorField]
-          : row[mapping.cursorField]
-      )
+      ...optionalStringProperty("sourceUpdatedAt", sourceUpdatedAtValue)
     });
   });
 
