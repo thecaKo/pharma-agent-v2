@@ -767,6 +767,14 @@ class EarlyCloseWebSocket extends EventEmitter implements WebSocketLike {
     this.serverClose(1000, "client close");
   }
 
+  public ping(): void {
+    // no-op stub — ping/pong logic lives in Task 6
+  }
+
+  public terminate(): void {
+    this.serverClose(1006, "terminated");
+  }
+
   public serverClose(code: number, reason: string): void {
     if (this.readyState === this.CLOSED) {
       return;

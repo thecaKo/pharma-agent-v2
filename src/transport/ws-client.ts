@@ -71,8 +71,11 @@ export interface WebSocketLike {
   once(event: "error", listener: (error: Error) => void): this;
   once(event: "close", listener: (code: number, reason: Buffer) => void): this;
   on(event: "message", listener: (data: RawData) => void): this;
+  on(event: "pong", listener: (data: Buffer) => void): this;
   send(data: string): void;
   close(): void;
+  ping(): void;
+  terminate(): void;
 }
 
 export type WebSocketFactory = (url: string, options: WebSocketLikeOptions) => WebSocketLike;

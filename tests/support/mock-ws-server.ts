@@ -135,6 +135,14 @@ class InMemoryWebSocket extends EventEmitter implements WebSocketLike {
     this.emit("close", code, Buffer.from(reason, "utf8"));
   }
 
+  public ping(): void {
+    // no-op stub — ping/pong logic lives in Task 6
+  }
+
+  public terminate(): void {
+    this.close(1006, "terminated");
+  }
+
   public receive(payload: string): void {
     if (this.readyState !== READY_STATE.OPEN) {
       return;
