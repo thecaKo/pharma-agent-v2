@@ -261,7 +261,7 @@ function readColumn(row: unknown): DatabaseColumn | undefined {
 
   return {
     name,
-    dataType: normalizeOptionalString(row.dataType ?? row.DATA_TYPE),
+    dataType: normalizeOptionalString(row.dataType ?? row.DATA_TYPE ?? row.DATATYPE),
     nullable: normalizeNullable(row.nullable ?? row.NULLABLE)
   };
 }

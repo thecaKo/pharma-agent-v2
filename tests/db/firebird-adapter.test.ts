@@ -165,6 +165,28 @@ describe("FirebirdSourceAdapter", () => {
     ]);
   });
 
+  it("resolves dataType from DATATYPE key when Firebird driver uppercases alias without underscore", async () => {
+    const connection: FirebirdDriverConnection = {
+      query: vi.fn(async () => [
+        { NAME: "UPDATED_AT", DATATYPE: "timestamp", NULLABLE: 0 },
+        { NAME: "AMOUNT", DATATYPE: "numeric", NULLABLE: 1 }
+      ]),
+      detach: vi.fn(async () => undefined)
+    };
+    const adapter = new FirebirdSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    const columns = await adapter.listColumns("SALES");
+
+    expect(columns).toEqual([
+      { name: "UPDATED_AT", dataType: "timestamp", nullable: false },
+      { name: "AMOUNT", dataType: "numeric", nullable: true }
+    ]);
+  });
+
   it("returns an empty column list when Firebird metadata rows are not in the expected shape", async () => {
     const connection: FirebirdDriverConnection = {
       query: vi.fn(async () => [{ field: "PRODUCT_ID" }, { NAME: " " }, null]),
