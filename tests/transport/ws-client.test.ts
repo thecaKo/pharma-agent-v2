@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../../src/logging/logger.js";
 import { buildProductBatch } from "../../src/poller/batch-builder.js";
 import {
@@ -13,6 +13,7 @@ import {
   SETUP_CONFIG_VALIDATION_FAILED_ERROR_CODE
 } from "../../src/transport/connector-setup-ws.js";
 import { CATALOG_MAPPING_PREVIEW_RESULT_TYPE } from "../../src/transport/mapping-preview.js";
+import type { RawData } from "ws";
 import { WebSocketTransportClient, type WebSocketLike } from "../../src/transport/ws-client.js";
 import { validMapping } from "../helpers/mapping.js";
 import { MockWebSocketServer, waitFor } from "../support/mock-ws-server.js";
@@ -809,3 +810,173 @@ function onceClientEvent<T>(client: WebSocketTransportClient, event: string): Pr
     client.once(event, (message) => resolve(message as T));
   });
 }
+
+function silentLogger() {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn()
+  };
+}
+
+describe("zombie socket detection", () => {
+  function manualClientTimers() {
+    const intervals: Array<{ cb: () => void; ms: number; handle: object }> = [];
+    const timeouts: Array<{ cb: () => void; ms: number; handle: object }> = [];
+    return {
+      intervals,
+      timeouts,
+      setInterval: (cb: () => void, ms: number) => {
+        const handle = {};
+        intervals.push({ cb, ms, handle });
+        return handle;
+      },
+      clearInterval: (handle: unknown) => {
+        const idx = intervals.findIndex((entry) => entry.handle === handle);
+        if (idx >= 0) intervals.splice(idx, 1);
+      },
+      setTimeout: (cb: () => void, ms: number) => {
+        const handle = {};
+        timeouts.push({ cb, ms, handle });
+        return handle;
+      },
+      clearTimeout: (handle: unknown) => {
+        const idx = timeouts.findIndex((entry) => entry.handle === handle);
+        if (idx >= 0) timeouts.splice(idx, 1);
+      }
+    };
+  }
+
+  function createFakeSocketHandles() {
+    const listeners = {
+      open: [] as Array<() => void>,
+      error: [] as Array<(err: Error) => void>,
+      close: [] as Array<(code: number, reason: Buffer) => void>,
+      message: [] as Array<(data: RawData) => void>,
+      pong: [] as Array<(data: Buffer) => void>
+    };
+    const socket: WebSocketLike = {
+      OPEN: 1,
+      CLOSED: 3,
+      readyState: 0,
+      once: vi.fn((event: string, listener: (...args: any[]) => void) => {
+        if (event === "open") listeners.open.push(listener as () => void);
+        else if (event === "error") listeners.error.push(listener as (e: Error) => void);
+        else if (event === "close") listeners.close.push(listener as (c: number, r: Buffer) => void);
+        return socket;
+      }),
+      on: vi.fn((event: string, listener: (...args: any[]) => void) => {
+        if (event === "message") listeners.message.push(listener as (d: RawData) => void);
+        else if (event === "pong") listeners.pong.push(listener as (d: Buffer) => void);
+        return socket;
+      }),
+      send: vi.fn(),
+      close: vi.fn(),
+      ping: vi.fn(),
+      terminate: vi.fn()
+    };
+    return {
+      socket,
+      openSocket: () => {
+        socket.readyState = socket.OPEN;
+        listeners.open.forEach((l) => l());
+      },
+      emitClose: (code = 1000, reason = "") => {
+        socket.readyState = socket.CLOSED;
+        listeners.close.forEach((l) => l(code, Buffer.from(reason)));
+      },
+      emitPong: () => {
+        listeners.pong.forEach((l) => l(Buffer.alloc(0)));
+      }
+    };
+  }
+
+  it("starts pinging at the configured interval after open", async () => {
+    const timers = manualClientTimers();
+    const { socket, openSocket } = createFakeSocketHandles();
+    const client = new WebSocketTransportClient({
+      url: "wss://example",
+      connectorToken: "pac_test",
+      logger: silentLogger(),
+      socketFactory: () => socket,
+      pingIntervalMs: 5_000,
+      pongTimeoutMs: 1_000,
+      timers
+    });
+
+    void client.connect();
+    openSocket();
+
+    expect(timers.intervals).toHaveLength(1);
+    expect(timers.intervals[0]!.ms).toBe(5_000);
+
+    timers.intervals[0]!.cb();
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminates the socket when pong does not arrive within timeout", async () => {
+    const timers = manualClientTimers();
+    const { socket, openSocket } = createFakeSocketHandles();
+    const client = new WebSocketTransportClient({
+      url: "wss://example",
+      connectorToken: "pac_test",
+      logger: silentLogger(),
+      socketFactory: () => socket,
+      pingIntervalMs: 5_000,
+      pongTimeoutMs: 1_000,
+      timers
+    });
+    void client.connect();
+    openSocket();
+
+    timers.intervals[0]!.cb();
+    expect(timers.timeouts).toHaveLength(1);
+    expect(timers.timeouts[0]!.ms).toBe(1_000);
+
+    timers.timeouts[0]!.cb();
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears pong deadline when pong arrives", async () => {
+    const timers = manualClientTimers();
+    const { socket, openSocket, emitPong } = createFakeSocketHandles();
+    const client = new WebSocketTransportClient({
+      url: "wss://example",
+      connectorToken: "pac_test",
+      logger: silentLogger(),
+      socketFactory: () => socket,
+      pingIntervalMs: 5_000,
+      pongTimeoutMs: 1_000,
+      timers
+    });
+    void client.connect();
+    openSocket();
+
+    timers.intervals[0]!.cb();
+    expect(timers.timeouts).toHaveLength(1);
+
+    emitPong();
+    expect(timers.timeouts).toHaveLength(0);
+    expect(socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("stops pinging on close", async () => {
+    const timers = manualClientTimers();
+    const { socket, openSocket, emitClose } = createFakeSocketHandles();
+    const client = new WebSocketTransportClient({
+      url: "wss://example",
+      connectorToken: "pac_test",
+      logger: silentLogger(),
+      socketFactory: () => socket,
+      pingIntervalMs: 5_000,
+      pongTimeoutMs: 1_000,
+      timers
+    });
+    void client.connect();
+    openSocket();
+
+    emitClose();
+    expect(timers.intervals).toHaveLength(0);
+  });
+});

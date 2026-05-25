@@ -57,6 +57,14 @@ export interface WebSocketTransportClientOptions {
   logger: Logger;
   retryPolicy?: RetryPolicyOptions;
   socketFactory?: WebSocketFactory;
+  pingIntervalMs?: number;
+  pongTimeoutMs?: number;
+  timers?: {
+    setInterval(cb: () => void, ms: number): unknown;
+    clearInterval(handle: unknown): void;
+    setTimeout(cb: () => void, ms: number): unknown;
+    clearTimeout(handle: unknown): void;
+  };
 }
 
 export interface WebSocketLikeOptions {
@@ -103,16 +111,31 @@ const DEFAULT_RETRY_POLICY: RetryPolicyOptions = {
   jitterRatio: 0.25
 };
 
+const DEFAULT_PING_INTERVAL_MS = 30_000;
+const DEFAULT_PONG_TIMEOUT_MS = 10_000;
+
+const defaultClientTimers = {
+  setInterval: (cb: () => void, ms: number) => setInterval(cb, ms),
+  clearInterval: (handle: unknown) => clearInterval(handle as ReturnType<typeof setInterval>),
+  setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
+  clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>)
+};
+
 export class WebSocketTransportClient extends EventEmitter {
   private readonly url: string;
   private readonly connectorToken: string;
   private readonly logger: Logger;
   private readonly retryPolicy: RetryPolicyOptions;
   private readonly socketFactory: WebSocketFactory;
+  private readonly pingIntervalMs: number;
+  private readonly pongTimeoutMs: number;
+  private readonly clientTimers: NonNullable<WebSocketTransportClientOptions["timers"]>;
   private socket?: WebSocketLike;
   private stopped = true;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectAttemptCount = 0;
+  private pingIntervalHandle?: unknown;
+  private pongDeadlineHandle?: unknown;
 
   public constructor(options: WebSocketTransportClientOptions) {
     super();
@@ -121,6 +144,9 @@ export class WebSocketTransportClient extends EventEmitter {
     this.logger = options.logger;
     this.retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
     this.socketFactory = options.socketFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions));
+    this.pingIntervalMs = options.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
+    this.pongTimeoutMs = options.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS;
+    this.clientTimers = options.timers ?? defaultClientTimers;
   }
 
   public override on(event: "connected", listener: () => void): this;
@@ -279,6 +305,7 @@ export class WebSocketTransportClient extends EventEmitter {
         this.reconnectAttemptCount = 0;
         this.logger.info("websocket connected", { url: this.url });
         this.emit("connected");
+        this.startPingLoop(socket);
         resolve();
       });
 
@@ -297,7 +324,9 @@ export class WebSocketTransportClient extends EventEmitter {
       });
 
       socket.on("message", (data) => this.handleMessage(data));
+      socket.on("pong", () => this.clearPongDeadline());
       socket.once("close", (code, reason) => {
+        this.stopPingLoop();
         const closeInfo = { code, reason: reason.toString("utf8") };
         this.logger.warn("websocket disconnected", closeInfo);
         this.emit("disconnected", closeInfo);
@@ -516,6 +545,56 @@ export class WebSocketTransportClient extends EventEmitter {
       throw new Error("WebSocket is not connected");
     }
     this.socket.send(payload);
+  }
+
+  private startPingLoop(socket: WebSocketLike): void {
+    this.stopPingLoop();
+    this.pingIntervalHandle = this.clientTimers.setInterval(() => {
+      if (socket.readyState !== socket.OPEN) {
+        return;
+      }
+      try {
+        socket.ping();
+      } catch (error) {
+        this.logger.warn("websocket.ping.failed", {
+          message: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
+      this.armPongDeadline(socket);
+    }, this.pingIntervalMs);
+  }
+
+  private stopPingLoop(): void {
+    if (this.pingIntervalHandle !== undefined) {
+      this.clientTimers.clearInterval(this.pingIntervalHandle);
+      this.pingIntervalHandle = undefined;
+    }
+    this.clearPongDeadline();
+  }
+
+  private armPongDeadline(socket: WebSocketLike): void {
+    this.clearPongDeadline();
+    this.pongDeadlineHandle = this.clientTimers.setTimeout(() => {
+      this.pongDeadlineHandle = undefined;
+      this.logger.warn("websocket.pong.timeout", {
+        pongTimeoutMs: this.pongTimeoutMs
+      });
+      try {
+        socket.terminate();
+      } catch (error) {
+        this.logger.warn("websocket.terminate.failed", {
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }, this.pongTimeoutMs);
+  }
+
+  private clearPongDeadline(): void {
+    if (this.pongDeadlineHandle !== undefined) {
+      this.clientTimers.clearTimeout(this.pongDeadlineHandle);
+      this.pongDeadlineHandle = undefined;
+    }
   }
 
   private scheduleReconnect(): void {
