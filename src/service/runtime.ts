@@ -189,7 +189,9 @@ export class ConnectorRuntime {
       new WebSocketTransportClient({
         url: this.config.websocketUrl,
         connectorToken: this.config.connectorToken,
-        logger: this.logger
+        logger: this.logger,
+        pingIntervalMs: this.config.wsPingIntervalMs,
+        pongTimeoutMs: this.config.wsPongTimeoutMs
       });
     this.timers = options.timers ?? defaultTimers;
     this.now = options.now ?? (() => new Date().toISOString());
