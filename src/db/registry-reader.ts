@@ -96,10 +96,10 @@ function parseValues(stdout: string): Record<string, string> {
       continue;
     }
     const [, name, value] = match;
-    if (name === "(Default)") {
+    if (!name || name === "(Default)") {
       continue;
     }
-    values[name] = value;
+    values[name] = value ?? "";
   }
   return values;
 }
