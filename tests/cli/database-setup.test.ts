@@ -10,6 +10,7 @@ import {
   discoveryConnectionSource,
   formatCandidateSelectionTable,
   manualConnectionSource,
+  maybeDiscoverPostgresDsn,
   parseDatabaseSetupArgs,
   promptForConnectionConfig,
   rankDatabaseColumns,
@@ -1440,5 +1441,85 @@ describe("connectionDefaults — postgresql", () => {
       user: "",
       password: ""
     });
+  });
+});
+
+describe("maybeDiscoverPostgresDsn", () => {
+  function makePrompt(answers: { confirm?: boolean; selected?: string }) {
+    return {
+      text: vi.fn(),
+      select: vi.fn(async () => answers.selected ?? ""),
+      confirm: vi.fn(async () => answers.confirm ?? false)
+    };
+  }
+
+  it("returns undefined when the user declines the DSN scan", async () => {
+    const prompt = makePrompt({ confirm: false });
+    const discover = vi.fn(async () => []);
+    const stdout = { write: vi.fn() };
+
+    const result = await maybeDiscoverPostgresDsn({
+      prompt,
+      stdout,
+      discoverPostgresDsns: discover
+    });
+
+    expect(result).toBeUndefined();
+    expect(discover).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined and prints fallback notice when no DSN is found", async () => {
+    const prompt = makePrompt({ confirm: true });
+    const discover = vi.fn(async () => []);
+    const stdout = { write: vi.fn() };
+
+    const result = await maybeDiscoverPostgresDsn({
+      prompt,
+      stdout,
+      discoverPostgresDsns: discover
+    });
+
+    expect(result).toBeUndefined();
+    expect(stdout.write).toHaveBeenCalledWith(
+      expect.stringContaining("Nenhum DSN PSQLODBC encontrado")
+    );
+  });
+
+  it("returns selected DSN's host/port/database/user when one DSN is picked", async () => {
+    const prompt = makePrompt({ confirm: true, selected: "VetorFarma" });
+    const discover = vi.fn(async () => [
+      { dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" },
+      { dsnName: "Other", host: "10.0.0.1" }
+    ]);
+    const stdout = { write: vi.fn() };
+
+    const result = await maybeDiscoverPostgresDsn({
+      prompt,
+      stdout,
+      discoverPostgresDsns: discover
+    });
+
+    expect(result).toEqual({
+      host: "127.0.0.1",
+      port: 5432,
+      databaseName: "vf",
+      user: "vfuser"
+    });
+  });
+
+  it("does NOT return a password under any circumstances", async () => {
+    const prompt = makePrompt({ confirm: true, selected: "VetorFarma" });
+    const discover = vi.fn(async () => [
+      { dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" }
+    ]);
+    const stdout = { write: vi.fn() };
+
+    const result = await maybeDiscoverPostgresDsn({
+      prompt,
+      stdout,
+      discoverPostgresDsns: discover
+    });
+
+    expect(result).not.toHaveProperty("password");
   });
 });

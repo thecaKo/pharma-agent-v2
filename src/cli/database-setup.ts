@@ -21,6 +21,9 @@ import type { DatabaseColumn, DatabaseTable, SourceDatabaseAdapter } from "../db
 import { redactString } from "../logging/redact.js";
 import type { CursorType, MappingConfig, ProductFieldMappings } from "../mapping/types.js";
 import { validateMappingConfig } from "../mapping/validate.js";
+import { discoverPostgresDsns as defaultDiscoverPostgresDsns } from "../db/dsn-discovery.js";
+import type { PostgresDsnCandidate } from "../db/dsn-discovery.js";
+import { createRegExeRegistryReader } from "../db/registry-reader.js";
 import {
   writeDatabaseSetupState,
   type DatabaseSetupStateInput,
@@ -81,6 +84,7 @@ export interface DatabaseSetupCliIo {
     now?: Date;
   }) => Promise<WriteConnectorEnvFileResult>;
   writeDatabaseSetupState?: (input: DatabaseSetupStateInput) => Promise<OnboardingMappingArtifact>;
+  discoverPostgresDsns?: () => Promise<PostgresDsnCandidate[]>;
   env?: Environment;
   now?: () => Date;
 }
@@ -263,16 +267,26 @@ async function resolveConnectionSource(input: {
   prompt: DatabaseSetupPrompt;
   io: DatabaseSetupCliIo;
   scan: NonNullable<DatabaseSetupCliIo["discoverDatabaseFiles"]>;
-}): Promise<DatabaseSetupConnectionSource> {
+}): Promise<{ source: DatabaseSetupConnectionSource; overrides?: Partial<ConnectionDefaults> }> {
   if (input.mode === "manual") {
     const driver = await selectManualDriver(input.prompt);
-    return manualConnectionSource(driver);
+    if (driver === "postgresql") {
+      const discover = input.io.discoverPostgresDsns
+        ?? (() => defaultDiscoverPostgresDsns(createRegExeRegistryReader()));
+      const overrides = await maybeDiscoverPostgresDsn({
+        prompt: input.prompt,
+        stdout: input.io.stdout,
+        discoverPostgresDsns: discover
+      });
+      return { source: manualConnectionSource(driver), overrides };
+    }
+    return { source: manualConnectionSource(driver) };
   }
 
   input.io.stdout.write("Buscando bancos locais...\n");
   const discovery = await input.scan({ roots: input.options.roots });
   const candidate = await selectCandidate(discovery.candidates, input.prompt, input.io);
-  return discoveryConnectionSource(candidate);
+  return { source: discoveryConnectionSource(candidate) };
 }
 
 export async function runDatabaseSetup(
@@ -287,8 +301,21 @@ export async function runDatabaseSetup(
   const persistState = io.writeDatabaseSetupState ?? writeDatabaseSetupState;
 
   const mode = await selectSetupMode(prompt, io);
-  const connectionSource = await resolveConnectionSource({ mode, options, prompt, io, scan });
-  let config = await promptForConnectionConfig({ source: connectionSource, options, prompt, env, io });
+  const { source: connectionSource, overrides: defaultsOverride } = await resolveConnectionSource({
+    mode,
+    options,
+    prompt,
+    io,
+    scan
+  });
+  let config = await promptForConnectionConfig({
+    source: connectionSource,
+    options,
+    prompt,
+    env,
+    io,
+    defaultsOverride
+  });
 
   let adapter = createAdapter({ config, io });
   try {
@@ -440,6 +467,55 @@ export function manualConnectionSource(driver: DatabaseDriver): DatabaseSetupCon
     mode: "manual",
     driver
   };
+}
+
+export interface MaybeDiscoverPostgresDsnInput {
+  prompt: DatabaseSetupPrompt;
+  stdout: Pick<NodeJS.WriteStream, "write">;
+  discoverPostgresDsns: () => Promise<PostgresDsnCandidate[]>;
+}
+
+export async function maybeDiscoverPostgresDsn(
+  input: MaybeDiscoverPostgresDsnInput
+): Promise<Partial<ConnectionDefaults> | undefined> {
+  const wantsScan = await input.prompt.confirm({
+    message: "Procurar DSN PSQLODBC instalado?",
+    defaultValue: true
+  });
+  if (!wantsScan) {
+    return undefined;
+  }
+
+  const dsns = await input.discoverPostgresDsns();
+  if (dsns.length === 0) {
+    input.stdout.write("Nenhum DSN PSQLODBC encontrado. Caindo no modo manual.\n");
+    return undefined;
+  }
+
+  const firstDsn = dsns[0] as PostgresDsnCandidate;
+  const selected = await input.prompt.select({
+    message: "Selecione o DSN",
+    choices: dsns.map((dsn) => ({
+      value: dsn.dsnName,
+      label: formatDsnLabel(dsn)
+    })),
+    defaultValue: firstDsn.dsnName
+  });
+
+  const picked: PostgresDsnCandidate = dsns.find((dsn) => dsn.dsnName === selected) ?? firstDsn;
+  const overrides: Partial<ConnectionDefaults> = {};
+  if (picked.host) overrides.host = picked.host;
+  if (picked.port !== undefined) overrides.port = picked.port;
+  if (picked.database) overrides.databaseName = picked.database;
+  if (picked.user) overrides.user = picked.user;
+  return overrides;
+}
+
+function formatDsnLabel(dsn: PostgresDsnCandidate): string {
+  const parts: string[] = [dsn.dsnName];
+  if (dsn.host) parts.push(`@${dsn.host}${dsn.port ? `:${dsn.port}` : ""}`);
+  if (dsn.database) parts.push(`/${dsn.database}`);
+  return parts.join("");
 }
 
 export interface ConnectionDefaults {
@@ -598,8 +674,10 @@ export async function promptForConnectionConfig(input: {
   prompt: DatabaseSetupPrompt;
   env: Environment;
   io: Pick<DatabaseSetupCliIo, "stdout">;
+  defaultsOverride?: Partial<ConnectionDefaults>;
 }): Promise<DatabaseConfig> {
-  const defaults = connectionDefaults(input.source, input.env);
+  const base = connectionDefaults(input.source, input.env);
+  const defaults: ConnectionDefaults = { ...base, ...(input.defaultsOverride ?? {}) };
   const host = await input.prompt.text({
     message: "Host do banco",
     defaultValue: defaults.host
@@ -610,15 +688,24 @@ export async function promptForConnectionConfig(input: {
   });
   const port = parsePositiveInteger(portValue, "DB_PORT");
 
+  const databasePromptMessage =
+    input.source.driver === "mysql"
+      ? "Schema/database do MySQL"
+      : input.source.driver === "postgresql"
+        ? "Database do PostgreSQL"
+        : "Arquivo/caminho do Firebird";
+
   const name = await input.prompt.text({
-    message: input.source.driver === "mysql" ? "Schema/database do MySQL" : "Arquivo/caminho do Firebird",
+    message: databasePromptMessage,
     defaultValue: defaults.databaseName
   });
   if (name.trim().length === 0) {
     throw new Error(
       input.source.driver === "mysql"
         ? "MySQL setup requires a database/schema name before connection."
-        : "Firebird database path is required."
+        : input.source.driver === "postgresql"
+          ? "PostgreSQL setup requires a database name before connection."
+          : "Firebird database path is required."
     );
   }
 
