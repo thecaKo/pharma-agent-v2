@@ -74,12 +74,19 @@ describe("loadConfig", () => {
     }
   });
 
+  it("accepts postgresql as a valid DB_DRIVER", () => {
+    const config = loadConfig(validEnv({ DB_DRIVER: "postgresql", DB_PORT: "5432" }));
+
+    expect(config.database.driver).toBe("postgresql");
+    expect(config.database.port).toBe(5432);
+  });
+
   it("rejects unsupported database drivers with a descriptive non-secret error", () => {
     try {
-      loadConfig(validEnv({ DB_DRIVER: "postgres" }));
+      loadConfig(validEnv({ DB_DRIVER: "oracle" }));
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigValidationError);
-      expect(String(error)).toContain("DB_DRIVER must be mysql or firebird");
+      expect(String(error)).toContain("DB_DRIVER must be mysql, firebird, or postgresql");
       expect(String(error)).not.toContain("test-connector-token");
       expect(String(error)).not.toContain("test-db-password");
     }

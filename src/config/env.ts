@@ -29,7 +29,7 @@ export interface LoadConfigOptions {
   requireDatabase?: boolean;
 }
 
-const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird"]);
+const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird", "postgresql"]);
 const LOG_LEVELS = new Set<LogLevel>(["debug", "info", "warn", "error"]);
 
 function parsePositiveInteger(
@@ -128,7 +128,7 @@ export function loadConfig(
 
   const driver = readRequired(env, "DB_DRIVER");
   if (driver && !DATABASE_DRIVERS.has(driver as DatabaseDriver)) {
-    issues.push({ field: "DB_DRIVER", message: "must be mysql or firebird" });
+    issues.push({ field: "DB_DRIVER", message: "must be mysql, firebird, or postgresql" });
   }
 
   const portValue = readRequired(env, "DB_PORT");
