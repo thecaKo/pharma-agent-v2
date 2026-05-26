@@ -1017,6 +1017,21 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
         },
         config
       );
+    },
+    postgresConnectionFactory: async (config) => {
+      const { Client } = await import("pg");
+      const client = new Client({
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        user: config.user,
+        password: config.password
+      });
+      await client.connect();
+      return {
+        query: async (sql, params) => client.query(sql, [...params]),
+        end: () => client.end()
+      };
     }
   };
 }
