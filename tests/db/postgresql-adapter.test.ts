@@ -100,4 +100,106 @@ describe("PostgresSourceAdapter", () => {
       retryable: true
     });
   });
+
+  it("passes SQL and params to the driver and returns rows from .rows", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows: [{ product_id: "P-001", updated_at: 12 }] })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    const rows = await adapter.queryChanges({
+      sql: "select * from products where updated_at > $1 order by updated_at limit $2",
+      cursor: 10,
+      limit: 25
+    });
+
+    expect(connection.query).toHaveBeenCalledWith(
+      "select * from products where updated_at > $1 order by updated_at limit $2",
+      [10, 25]
+    );
+    expect(rows).toEqual([{ product_id: "P-001", updated_at: 12 }]);
+  });
+
+  it("coerces timestamp cursor strings into Date for postgres timestamp params", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows: [] })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    await adapter.queryChanges({
+      sql: "select * from products where updated_at > $1 order by updated_at limit $2",
+      cursor: "Sat May 16 2026 20:00:02 GMT-0300 (Brasilia Standard Time)",
+      limit: 25
+    });
+
+    expect(connection.query).toHaveBeenCalledWith(
+      "select * from products where updated_at > $1 order by updated_at limit $2",
+      [expect.any(Date), 25]
+    );
+  });
+
+  it("emits LIMIT $1 OFFSET $2 params for snapshot pages", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows: [{ product_id: "P-001" }] })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+    await expect(
+      adapter.querySnapshotPage({
+        sql: "select * from products order by product_id limit $1 offset $2",
+        limit: 500,
+        offset: 1000
+      })
+    ).resolves.toEqual([{ product_id: "P-001" }]);
+
+    expect(connection.query).toHaveBeenCalledWith(
+      "select * from products order by product_id limit $1 offset $2",
+      [500, 1000]
+    );
+  });
+
+  it("normalizes query errors without leaking secrets", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => {
+        throw Object.assign(new Error("relation \"vetorfarma.products\" does not exist; password=super-secret-password"), {
+          code: "42P01"
+        });
+      }),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    try {
+      await adapter.queryChanges({ sql: "select 1", cursor: null, limit: 1 });
+    } catch (error) {
+      expect(error).toBeInstanceOf(DatabaseOperationError);
+      expect(error).toMatchObject({
+        driver: "postgresql",
+        operation: "query",
+        errorCode: "POSTGRESQL_42P01"
+      });
+      expect(String(error)).not.toContain("super-secret-password");
+      expect(String(error)).not.toContain("vetorfarma");
+    }
+  });
 });

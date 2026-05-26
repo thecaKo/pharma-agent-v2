@@ -83,12 +83,39 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
-  public async queryChanges(_input: QueryChangesInput): Promise<SourceRow[]> {
-    throw new Error("not implemented yet");
+  public async queryChanges(input: QueryChangesInput): Promise<SourceRow[]> {
+    const connection = this.requireConnection();
+
+    try {
+      const result = await connection.query(input.sql, [
+        normalizeCursorParam(input.cursor),
+        input.limit
+      ]);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "postgresql",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
   }
 
-  public async querySnapshotPage(_input: QuerySnapshotPageInput): Promise<SourceRow[]> {
-    throw new Error("not implemented yet");
+  public async querySnapshotPage(input: QuerySnapshotPageInput): Promise<SourceRow[]> {
+    const connection = this.requireConnection();
+
+    try {
+      const result = await connection.query(input.sql, [input.limit, input.offset]);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "postgresql",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
   }
 
   public async listTables(): Promise<DatabaseTable[]> {
@@ -110,4 +137,31 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
     }
     return this.connection;
   }
+}
+
+function normalizeRows(result: unknown): SourceRow[] {
+  if (isRecord(result) && Array.isArray((result as { rows?: unknown }).rows)) {
+    return ((result as { rows: unknown[] }).rows.filter(isRecord) as SourceRow[]).map(
+      (row) => ({ ...row })
+    );
+  }
+  return [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeCursorParam(value: QueryChangesInput["cursor"]): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const parsedAt = Date.parse(normalized);
+  return Number.isNaN(parsedAt) ? normalized : new Date(parsedAt);
 }
