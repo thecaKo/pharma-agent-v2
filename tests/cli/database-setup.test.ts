@@ -1392,3 +1392,53 @@ describe("buildSnapshotReadTestQuery — postgresql", () => {
     );
   });
 });
+
+describe("selectManualDriver", () => {
+  it("offers postgresql alongside mysql and firebird", async () => {
+    const choices: Array<readonly { value: string; label: string }[]> = [];
+    const prompt = {
+      text: vi.fn(),
+      select: vi.fn(async ({ choices: c }) => {
+        choices.push(c);
+        return "postgresql";
+      }),
+      confirm: vi.fn()
+    };
+
+    const driver = await selectManualDriver(prompt);
+
+    expect(driver).toBe("postgresql");
+    expect(choices[0]?.map((c) => c.value)).toEqual(["mysql", "firebird", "postgresql"]);
+  });
+
+  it("returns mysql when prompt returns mysql", async () => {
+    const prompt = {
+      text: vi.fn(),
+      select: vi.fn(async () => "mysql"),
+      confirm: vi.fn()
+    };
+    await expect(selectManualDriver(prompt)).resolves.toBe("mysql");
+  });
+
+  it("returns firebird when prompt returns firebird", async () => {
+    const prompt = {
+      text: vi.fn(),
+      select: vi.fn(async () => "firebird"),
+      confirm: vi.fn()
+    };
+    await expect(selectManualDriver(prompt)).resolves.toBe("firebird");
+  });
+});
+
+describe("connectionDefaults — postgresql", () => {
+  it("uses port 5432 and empty database/user/password by default", () => {
+    const defaults = connectionDefaults(manualConnectionSource("postgresql"));
+    expect(defaults).toEqual({
+      host: "127.0.0.1",
+      port: 5432,
+      databaseName: "",
+      user: "",
+      password: ""
+    });
+  });
+});

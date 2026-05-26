@@ -247,11 +247,14 @@ export async function selectManualDriver(prompt: DatabaseSetupPrompt): Promise<D
     message: "Selecione o driver do banco",
     choices: [
       { value: "mysql", label: "MySQL" },
-      { value: "firebird", label: "Firebird" }
+      { value: "firebird", label: "Firebird" },
+      { value: "postgresql", label: "PostgreSQL (VetorFarma e similares)" }
     ],
     defaultValue: "mysql"
   });
-  return selected === "firebird" ? "firebird" : "mysql";
+  if (selected === "firebird") return "firebird";
+  if (selected === "postgresql") return "postgresql";
+  return "mysql";
 }
 
 async function resolveConnectionSource(input: {
@@ -496,6 +499,16 @@ function driverConnectionDefaults(source: DatabaseSetupConnectionSource): Connec
       databaseName: "",
       user: "SYSDBA",
       password: "masterkey"
+    };
+  }
+
+  if (source.driver === "postgresql") {
+    return {
+      host: "127.0.0.1",
+      port: 5432,
+      databaseName: "",
+      user: "",
+      password: ""
     };
   }
 
