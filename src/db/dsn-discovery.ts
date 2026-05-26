@@ -26,6 +26,9 @@ export async function discoverPostgresDsns(reader: RegistryReader): Promise<Post
     for (let i = 0; i < ODBC_INI_INDEXES.length; i += 1) {
       const indexPath = ODBC_INI_INDEXES[i];
       const parentPath = ODBC_INI_PARENTS[i];
+      if (!indexPath || !parentPath) {
+        continue;
+      }
       let index: Record<string, string> = {};
       try {
         index = await reader.readKey(indexPath);
