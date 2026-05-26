@@ -32,4 +32,4 @@ export interface SourceDatabaseAdapter {
   listColumns(tableName: string): Promise<DatabaseColumn[]>;
 }
 
-export type SourceDatabaseAdapterKind = "mysql" | "firebird";
+export type SourceDatabaseAdapterKind = "mysql" | "firebird" | "postgresql";
