@@ -1374,3 +1374,21 @@ async function tempDir(prefix: string): Promise<string> {
   tempDirs.push(dir);
   return dir;
 }
+
+describe("buildIncrementalReadTestQuery — postgresql", () => {
+  it("emits $1 and $2 placeholders and double-quoted identifiers", () => {
+    const sql = buildIncrementalReadTestQuery("postgresql", "produtos", "updated_at");
+    expect(sql).toBe(
+      'select * from "produtos" where "updated_at" > $1 order by "updated_at" limit $2'
+    );
+  });
+});
+
+describe("buildSnapshotReadTestQuery — postgresql", () => {
+  it("emits LIMIT $1 OFFSET $2 placeholders for postgres", () => {
+    const sql = buildSnapshotReadTestQuery("postgresql", "produtos", "produto_id");
+    expect(sql).toBe(
+      'select * from "produtos" order by "produto_id" limit $1 offset $2'
+    );
+  });
+});

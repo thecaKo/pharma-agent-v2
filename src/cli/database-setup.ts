@@ -402,6 +402,9 @@ export function buildIncrementalReadTestQuery(
 ): string {
   const quotedTable = quoteIdentifier(driver, tableName);
   const quotedCursor = quoteIdentifier(driver, cursorField);
+  if (driver === "postgresql") {
+    return `select * from ${quotedTable} where ${quotedCursor} > $1 order by ${quotedCursor} limit $2`;
+  }
   const limitClause = driver === "mysql" ? "limit ?" : "rows ?";
   return `select * from ${quotedTable} where ${quotedCursor} > ? order by ${quotedCursor} ${limitClause}`;
 }
@@ -413,6 +416,9 @@ export function buildSnapshotReadTestQuery(
 ): string {
   const quotedTable = quoteIdentifier(driver, tableName);
   const quotedOrder = quoteIdentifier(driver, stableOrderField);
+  if (driver === "postgresql") {
+    return `select * from ${quotedTable} order by ${quotedOrder} limit $1 offset $2`;
+  }
   return driver === "mysql"
     ? `select * from ${quotedTable} order by ${quotedOrder} limit ? offset ?`
     : `select * from ${quotedTable} order by ${quotedOrder} rows ? to ?`;
