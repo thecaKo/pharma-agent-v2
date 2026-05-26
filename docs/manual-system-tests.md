@@ -305,3 +305,17 @@ Use when validating script-based removal instead of **Windows Installer Verifica
 1. Run `.\scripts\uninstall-service.ps1`.
 2. Confirm `Get-Service -Name PharmaAgentConnector` returns no service.
 3. Leave `%PROGRAMDATA%\PharmaAgentConnector` in place for restart investigations unless decommissioning is final.
+
+## PostgreSQL (VetorFarma) smoke test
+
+Pré-requisito: um Postgres local acessível (Docker/Podman ou instalação direta) com pelo menos uma tabela de produtos populada.
+
+1. Suba o Postgres: `docker run --rm -d --name pg-smoke -e POSTGRES_PASSWORD=test -p 5432:5432 postgres:16`.
+2. Execute `npm run database-setup --`.
+3. Selecione `postgresql` no driver picker.
+4. Quando perguntado "Procurar DSN PSQLODBC instalado?", responda "não" (caminho de smoke test em Linux/macOS).
+5. Preencha host=`127.0.0.1`, port=`5432`, database=`postgres`, user=`postgres`, password=`test`.
+6. Verifique que a conexão sucede (`Conexao OK.`), que `listTables` retorna tabelas qualificadas por schema (`public.<nome>`), e que o artefato em `~/.pharma-agent/database-setup.json` contém `driver: "postgresql"` e nenhum campo de senha.
+7. Limpe: `docker rm -f pg-smoke`.
+
+Em Windows, opcionalmente repita com um DSN PSQLODBC pré-configurado para validar o fluxo de descoberta.
