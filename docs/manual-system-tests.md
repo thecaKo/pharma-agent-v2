@@ -319,3 +319,19 @@ Pré-requisito: um Postgres local acessível (Docker/Podman ou instalação dire
 7. Limpe: `docker rm -f pg-smoke`.
 
 Em Windows, opcionalmente repita com um DSN PSQLODBC pré-configurado para validar o fluxo de descoberta.
+
+## `connector.discovery` envelope on Windows
+
+Pré-requisito: máquina Windows com PSQLODBC instalado e pelo menos um DSN configurado em `HKLM\Software\ODBC\ODBC.INI`.
+
+1. Em uma shell separada, suba o painel mock: `npm run mock-panel -- serve`.
+2. Configure o agente apontando para essa URL (variáveis `CONNECTOR_WS_URL` e `CONNECTOR_TOKEN`).
+3. Inicie o serviço: `npm start`.
+4. Confirme no log do `mock-panel` que um envelope `connector.discovery` é recebido logo após `connected`, contendo:
+   - `platform: "win32"`
+   - `dsns: [...]` com pelo menos uma entrada do DSN PSQLODBC instalado
+   - **Nenhum** campo de senha em qualquer entrada.
+5. Reconecte (desligue/religue rede) e confirme que o envelope **NÃO** é reemitido após o segundo `connected`.
+6. Reinicie o serviço e confirme que um novo envelope é emitido (snapshot por boot).
+
+Em Linux/macOS o envelope é emitido com `dsns: []` e `platform` correspondente — útil para validar o caminho não-Windows sem alterar nada.
