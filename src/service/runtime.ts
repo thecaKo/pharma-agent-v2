@@ -23,6 +23,7 @@ import type {
   AdminResponseMessage,
   ConfigUpdatedMessage,
   ConnectorConfigMessage,
+  ConnectorDiscoveryMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
 import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage } from "../transport/protocol.js";
@@ -78,6 +79,7 @@ export interface RuntimeTransport {
   sendSchemaTablesListResult(input: { correlationId: string; tables: readonly SchemaDiscoveryTable[] }): void;
   sendFileDiscoveryScanResult(message: FileDiscoveryScanResultMessage): void;
   sendConnectorSetupConfigResult(message: ConnectorSetupConfigResultMessage): void;
+  sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void;
   getReconnectAttemptCount(): number;
 }
 
