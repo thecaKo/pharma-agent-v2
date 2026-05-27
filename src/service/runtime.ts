@@ -7,6 +7,8 @@ import {
   type AdapterFactoryDependencies
 } from "../db/adapter-factory.js";
 import { attachFirebirdConnection } from "../db/firebird-driver.js";
+import { discoverPostgresDsns, type PostgresDsnCandidate } from "../db/dsn-discovery.js";
+import { createRegExeRegistryReader } from "../db/registry-reader.js";
 import type { SourceDatabaseAdapter } from "../db/source-adapter.js";
 import { createLogger, type Logger } from "../logging/logger.js";
 import { redactString } from "../logging/redact.js";
@@ -26,7 +28,7 @@ import type {
   ConnectorDiscoveryMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
-import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage } from "../transport/protocol.js";
+import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage, buildConnectorDiscoveryMessage } from "../transport/protocol.js";
 import {
   buildSetupConfigFailureResult,
   buildSetupConfigSuccessResult,
@@ -102,6 +104,8 @@ export interface ConnectorRuntimeOptions {
   transport?: RuntimeTransport;
   timers?: RuntimeTimers;
   now?: () => string;
+  discoverDsns?: () => Promise<PostgresDsnCandidate[]>;
+  discoveryTimeoutMs?: number;
 }
 
 export interface ConnectorRuntimeState {
@@ -157,6 +161,10 @@ export class ConnectorRuntime {
   private stopped = true;
   private adapterConnected = false;
   private lastErrorCode: string | undefined;
+  private readonly discoverDsnsFn: () => Promise<PostgresDsnCandidate[]>;
+  private readonly discoveryTimeoutMs: number;
+  private discoverySnapshotPromise?: Promise<PostgresDsnCandidate[]>;
+  private hasEmittedDiscoverySnapshot = false;
 
   public constructor(options: ConnectorRuntimeOptions = {}) {
     this.env = options.env;
@@ -197,10 +205,19 @@ export class ConnectorRuntime {
       });
     this.timers = options.timers ?? defaultTimers;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.discoverDsnsFn =
+      options.discoverDsns ?? (() => discoverPostgresDsns(createRegExeRegistryReader()));
+    this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 3000;
     this.bindTransportEvents();
   }
 
   public async start(): Promise<void> {
+    this.discoverySnapshotPromise = this.discoverDsnsFn().catch((error) => {
+      this.logger.warn("dsn.discovery_failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return [];
+    });
     this.stopped = false;
     this.logger.info("service.startup", {
       version: CONNECTOR_VERSION,
@@ -291,6 +308,11 @@ export class ConnectorRuntime {
     this.transport.on("connected", () => {
       this.logger.info("websocket.connected", {
         reconnectAttemptCount: this.transport.getReconnectAttemptCount()
+      });
+      this.emitDiscoverySnapshotOnce().catch((error) => {
+        this.logger.warn("dsn.discovery_emit_failed", {
+          message: error instanceof Error ? error.message : String(error)
+        });
       });
       this.sendHeartbeat();
       this.startHeartbeatLoop();
@@ -833,6 +855,43 @@ export class ConnectorRuntime {
         message
       });
       throw error;
+    }
+  }
+
+  private async emitDiscoverySnapshotOnce(): Promise<void> {
+    if (this.hasEmittedDiscoverySnapshot) {
+      return;
+    }
+    this.hasEmittedDiscoverySnapshot = true;
+
+    const promise = this.discoverySnapshotPromise ?? Promise.resolve<PostgresDsnCandidate[]>([]);
+    let dsns: PostgresDsnCandidate[] = [];
+
+    const timeoutPromise = new Promise<"__dsn_discovery_timeout__">((resolve) => {
+      setTimeout(() => resolve("__dsn_discovery_timeout__"), this.discoveryTimeoutMs);
+    });
+    const winner = await Promise.race([promise, timeoutPromise]);
+    if (winner === "__dsn_discovery_timeout__") {
+      this.logger.warn("dsn.discovery_timeout", {
+        message: "dsn discovery timeout — sending empty snapshot",
+        timeoutMs: this.discoveryTimeoutMs
+      });
+      dsns = [];
+    } else {
+      dsns = winner;
+    }
+
+    const envelope = buildConnectorDiscoveryMessage({
+      platform: process.platform,
+      dsns
+    });
+
+    try {
+      this.transport.sendConnectorDiscovery(envelope);
+    } catch (error) {
+      this.logger.warn("dsn.discovery_send_failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 

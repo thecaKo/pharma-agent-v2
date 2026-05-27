@@ -1305,3 +1305,172 @@ class FakeTransport extends EventEmitter implements RuntimeTransport {
     });
   }
 }
+
+import type { PostgresDsnCandidate } from "../../src/db/dsn-discovery.js";
+
+describe("ConnectorRuntime — DSN discovery snapshot on boot", () => {
+  function makeFakeTransport() {
+    const listeners: Record<string, ((arg?: unknown) => void)[]> = {};
+    const sent: unknown[] = [];
+    const transport = {
+      sent,
+      emit(event: string, arg?: unknown) {
+        (listeners[event] ?? []).forEach((cb) => cb(arg));
+      },
+      on(event: string, cb: (arg?: unknown) => void) {
+        (listeners[event] ??= []).push(cb);
+        return transport;
+      },
+      connect: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      isConnected: () => true,
+      sendBatch: vi.fn(),
+      sendHeartbeat: vi.fn(),
+      sendConnectorError: vi.fn(),
+      sendAdminResponse: vi.fn(),
+      sendSchemaTablesListResult: vi.fn(),
+      sendFileDiscoveryScanResult: vi.fn(),
+      sendConnectorSetupConfigResult: vi.fn(),
+      sendConnectorDiscovery: vi.fn((message: unknown) => { sent.push(message); }),
+      getReconnectAttemptCount: () => 0
+    };
+    return transport;
+  }
+
+  const baseEnv = {
+    CONNECTOR_TOKEN: "tok",
+    CONNECTOR_WS_URL: "wss://test/ws",
+    DB_DRIVER: "postgresql",
+    DB_HOST: "127.0.0.1",
+    DB_PORT: "5432",
+    DB_NAME: "vf",
+    DB_USER: "u",
+    DB_PASSWORD: "p",
+    LOG_LEVEL: "info"
+  } as NodeJS.ProcessEnv;
+
+  it("emits connector.discovery on first connected with the discovery result", async () => {
+    const transport = makeFakeTransport();
+    const discoverDsns = vi.fn(async (): Promise<PostgresDsnCandidate[]> => [
+      { dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" }
+    ]);
+    const runtime = new ConnectorRuntime({
+      env: baseEnv,
+      transport: transport as unknown as RuntimeTransport,
+      discoverDsns,
+      discoveryTimeoutMs: 1000
+    });
+
+    await runtime.start();
+    transport.emit("connected");
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sendConnectorDiscovery).toHaveBeenCalledOnce();
+    const sent = transport.sendConnectorDiscovery.mock.calls[0][0] as { type: string; platform: string; scannedAt: string; dsns: unknown[] };
+    expect(sent).toMatchObject({
+      type: "connector.discovery",
+      platform: process.platform,
+      dsns: [{ dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" }]
+    });
+    expect(typeof sent.scannedAt).toBe("string");
+
+    await runtime.shutdown();
+  });
+
+  it("emits with empty dsns when discovery returns []", async () => {
+    const transport = makeFakeTransport();
+    const runtime = new ConnectorRuntime({
+      env: baseEnv,
+      transport: transport as unknown as RuntimeTransport,
+      discoverDsns: async () => [],
+      discoveryTimeoutMs: 1000
+    });
+    await runtime.start();
+    transport.emit("connected");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sendConnectorDiscovery).toHaveBeenCalledOnce();
+    const sent = transport.sendConnectorDiscovery.mock.calls[0][0] as { dsns: unknown[] };
+    expect(sent.dsns).toEqual([]);
+
+    await runtime.shutdown();
+  });
+
+  it("emits envelope even when database config is missing", async () => {
+    const transport = makeFakeTransport();
+    const envWithoutDb = {
+      CONNECTOR_TOKEN: "tok",
+      CONNECTOR_WS_URL: "wss://test/ws",
+      LOG_LEVEL: "info"
+    } as NodeJS.ProcessEnv;
+    const runtime = new ConnectorRuntime({
+      env: envWithoutDb,
+      allowMissingDatabaseConfig: true,
+      transport: transport as unknown as RuntimeTransport,
+      discoverDsns: async () => [{ dsnName: "X", host: "h" }],
+      discoveryTimeoutMs: 1000
+    });
+    await runtime.start();
+    transport.emit("connected");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sendConnectorDiscovery).toHaveBeenCalledOnce();
+    await runtime.shutdown();
+  });
+
+  it("falls back to empty dsns when discovery times out", async () => {
+    const transport = makeFakeTransport();
+    const runtime = new ConnectorRuntime({
+      env: baseEnv,
+      transport: transport as unknown as RuntimeTransport,
+      discoverDsns: () => new Promise(() => {}), // never resolves
+      discoveryTimeoutMs: 20
+    });
+    await runtime.start();
+    transport.emit("connected");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(transport.sendConnectorDiscovery).toHaveBeenCalledOnce();
+    const sent = transport.sendConnectorDiscovery.mock.calls[0][0] as { dsns: unknown[] };
+    expect(sent.dsns).toEqual([]);
+
+    await runtime.shutdown();
+  });
+
+  it("swallows errors from transport.sendConnectorDiscovery", async () => {
+    const transport = makeFakeTransport();
+    transport.sendConnectorDiscovery = vi.fn(() => {
+      throw new Error("WebSocket is not connected");
+    });
+    const runtime = new ConnectorRuntime({
+      env: baseEnv,
+      transport: transport as unknown as RuntimeTransport,
+      discoverDsns: async () => [],
+      discoveryTimeoutMs: 1000
+    });
+    await runtime.start();
+    expect(() => transport.emit("connected")).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+    await runtime.shutdown();
+  });
+
+  it("does not re-emit on a second connected event (reconnect)", async () => {
+    const transport = makeFakeTransport();
+    const runtime = new ConnectorRuntime({
+      env: baseEnv,
+      transport: transport as unknown as RuntimeTransport,
+      discoverDsns: async () => [{ dsnName: "X", host: "h" }],
+      discoveryTimeoutMs: 1000
+    });
+    await runtime.start();
+    transport.emit("connected");
+    await new Promise((resolve) => setImmediate(resolve));
+    transport.emit("disconnected");
+    transport.emit("connected");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sendConnectorDiscovery).toHaveBeenCalledOnce();
+    await runtime.shutdown();
+  });
+});
