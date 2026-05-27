@@ -20,6 +20,7 @@ import {
   type AdminResponseMessage,
   type ConfigUpdatedMessage,
   type ConnectorConfigMessage,
+  type ConnectorDiscoveryMessage,
   type ConnectorErrorPayload,
   type ServerMessage
 } from "./protocol.js";
@@ -284,6 +285,10 @@ export class WebSocketTransportClient extends EventEmitter {
             message: message.message
           })
     });
+  }
+
+  public sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void {
+    this.send(message);
   }
 
   private async openSocket(): Promise<void> {

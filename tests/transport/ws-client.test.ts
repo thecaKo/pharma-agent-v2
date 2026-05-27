@@ -698,6 +698,28 @@ describe("WebSocketTransportClient", () => {
     });
   });
 
+  it("sends connector.discovery messages serialized as JSON", async () => {
+    client = createClient();
+    await client.connect();
+
+    client.sendConnectorDiscovery({
+      type: "connector.discovery",
+      scannedAt: "2026-05-27T12:00:00.000Z",
+      platform: "win32",
+      dsns: [{ dsnName: "X", host: "h", port: 5432 }]
+    });
+
+    const message = await server.nextMessage();
+    expect(message.raw).toBe(
+      JSON.stringify({
+        type: "connector.discovery",
+        scannedAt: "2026-05-27T12:00:00.000Z",
+        platform: "win32",
+        dsns: [{ dsnName: "X", host: "h", port: 5432 }]
+      })
+    );
+  });
+
   it("routes an in-memory admin request and returns a correlated admin response", async () => {
     client = createClient();
     client.on("adminRequest", (message) => {
