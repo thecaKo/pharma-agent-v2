@@ -3,9 +3,10 @@ import type { ProductChangeBatch } from "../poller/batch-builder.js";
 import type { CursorValue } from "../state/state-types.js";
 import { redactString } from "../logging/redact.js";
 import { normalizeCatalogConfigPushMessage } from "./catalog-config-push.js";
+import type { PostgresDsnCandidate } from "../db/dsn-discovery.js";
 
 export type ServerMessageType = "connector.config" | "batch.ack" | "config.updated" | "admin.request";
-export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response";
+export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response" | "connector.discovery";
 export type BatchNextAction = "continue" | "retry" | "reload_config";
 export type AdminCommand = "schema.listTables";
 
@@ -106,6 +107,13 @@ export interface ConnectorErrorMessage {
   error: ConnectorErrorPayload;
 }
 
+export interface ConnectorDiscoveryMessage {
+  type: "connector.discovery";
+  scannedAt: string;
+  platform: string;
+  dsns: PostgresDsnCandidate[];
+}
+
 export interface AdminResponseSuccessPayload {
   tables: string[];
 }
@@ -138,7 +146,8 @@ export type ConnectorMessage =
   | ConnectorHeartbeatMessage
   | ProductBatchMessage
   | ConnectorErrorMessage
-  | AdminResponseMessage;
+  | AdminResponseMessage
+  | ConnectorDiscoveryMessage;
 
 export class ProtocolParseError extends Error {
   public constructor(message: string) {
@@ -238,6 +247,21 @@ export function buildProductBatchMessage(batch: ProductChangeBatch, sentAt = new
       after: batch.cursorAfter
     },
     products: batch.records.map(toProductBatchWireProduct)
+  };
+}
+
+export function buildConnectorDiscoveryMessage(
+  input: {
+    platform: string;
+    dsns: PostgresDsnCandidate[];
+    scannedAt?: string;
+  }
+): ConnectorDiscoveryMessage {
+  return {
+    type: "connector.discovery",
+    scannedAt: input.scannedAt ?? new Date().toISOString(),
+    platform: input.platform,
+    dsns: input.dsns
   };
 }
 

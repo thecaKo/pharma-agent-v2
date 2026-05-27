@@ -4,16 +4,19 @@ import {
   buildAdminRequestMessage,
   buildAdminSuccessResponseMessage,
   buildConfigValidationConnectorError,
+  buildConnectorDiscoveryMessage,
   buildConnectorErrorMessage,
   buildProductBatchMessage,
   buildUnsupportedServerCommandRejection,
   CONFIG_VALIDATION_FAILED_ERROR_CODE,
   extractSafeConfigPushIdentity,
+  serializeConnectorMessage,
   UNSUPPORTED_SERVER_COMMAND_ERROR_CODE,
   parseAdminResponseMessage,
   parseServerMessage,
   ProtocolParseError
 } from "../../src/transport/protocol.js";
+import type { PostgresDsnCandidate } from "../../src/db/dsn-discovery.js";
 import { buildProductBatch } from "../../src/poller/batch-builder.js";
 import { validMapping, validSnapshotMapping } from "../helpers/mapping.js";
 
@@ -612,5 +615,44 @@ describe("transport protocol", () => {
     expect(serialized).not.toContain("secret-password");
     expect(serialized).not.toContain("connectorToken");
     expect(serialized).not.toContain("databasePassword");
+  });
+});
+
+describe("buildConnectorDiscoveryMessage", () => {
+  it("builds a connector.discovery envelope with platform, scannedAt and dsns", () => {
+    const dsns: PostgresDsnCandidate[] = [
+      { dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" }
+    ];
+    const message = buildConnectorDiscoveryMessage({
+      platform: "win32",
+      dsns,
+      scannedAt: "2026-05-27T12:00:00.000Z"
+    });
+    expect(message).toEqual({
+      type: "connector.discovery",
+      platform: "win32",
+      scannedAt: "2026-05-27T12:00:00.000Z",
+      dsns: [
+        { dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" }
+      ]
+    });
+  });
+
+  it("defaults scannedAt to now when not provided", () => {
+    const before = new Date().toISOString();
+    const message = buildConnectorDiscoveryMessage({ platform: "linux", dsns: [] });
+    const after = new Date().toISOString();
+    expect(message.scannedAt >= before && message.scannedAt <= after).toBe(true);
+  });
+
+  it("serializes to JSON with no password field even when a rogue field would be present", () => {
+    const dsns: PostgresDsnCandidate[] = [
+      { dsnName: "Risky", host: "host", user: "u" }
+    ];
+    const message = buildConnectorDiscoveryMessage({ platform: "win32", dsns });
+    const json = serializeConnectorMessage(message);
+    expect(json).not.toContain("password");
+    expect(json).not.toContain("Password");
+    expect(JSON.parse(json)).toMatchObject({ type: "connector.discovery", dsns });
   });
 });
