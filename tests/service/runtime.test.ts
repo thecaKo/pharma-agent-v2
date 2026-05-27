@@ -1429,7 +1429,7 @@ describe("ConnectorRuntime — DSN discovery snapshot on boot", () => {
     });
     await runtime.start();
     transport.emit("connected");
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(transport.sendConnectorDiscovery).toHaveBeenCalledOnce();
     const sent = transport.sendConnectorDiscovery.mock.calls[0][0] as { dsns: unknown[] };

@@ -867,10 +867,19 @@ export class ConnectorRuntime {
     const promise = this.discoverySnapshotPromise ?? Promise.resolve<PostgresDsnCandidate[]>([]);
     let dsns: PostgresDsnCandidate[] = [];
 
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<"__dsn_discovery_timeout__">((resolve) => {
-      setTimeout(() => resolve("__dsn_discovery_timeout__"), this.discoveryTimeoutMs);
+      timeoutHandle = setTimeout(() => resolve("__dsn_discovery_timeout__"), this.discoveryTimeoutMs);
+      timeoutHandle.unref?.();
     });
-    const winner = await Promise.race([promise, timeoutPromise]);
+    let winner: PostgresDsnCandidate[] | "__dsn_discovery_timeout__";
+    try {
+      winner = await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+    }
     if (winner === "__dsn_discovery_timeout__") {
       this.logger.warn("dsn.discovery_timeout", {
         message: "dsn discovery timeout — sending empty snapshot",
