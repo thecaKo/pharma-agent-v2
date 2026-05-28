@@ -81,12 +81,19 @@ describe("loadConfig", () => {
     expect(config.database.port).toBe(5432);
   });
 
+  it("accepts mariadb as a valid DB_DRIVER", () => {
+    const config = loadConfig(validEnv({ DB_DRIVER: "mariadb", DB_PORT: "3306" }));
+
+    expect(config.database.driver).toBe("mariadb");
+    expect(config.database.port).toBe(3306);
+  });
+
   it("rejects unsupported database drivers with a descriptive non-secret error", () => {
     try {
       loadConfig(validEnv({ DB_DRIVER: "oracle" }));
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigValidationError);
-      expect(String(error)).toContain("DB_DRIVER must be mysql, firebird, or postgresql");
+      expect(String(error)).toContain("DB_DRIVER must be mysql, firebird, postgresql, or mariadb");
       expect(String(error)).not.toContain("test-connector-token");
       expect(String(error)).not.toContain("test-db-password");
     }

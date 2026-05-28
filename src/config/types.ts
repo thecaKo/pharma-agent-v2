@@ -1,4 +1,4 @@
-export type DatabaseDriver = "mysql" | "firebird" | "postgresql";
+export type DatabaseDriver = "mysql" | "firebird" | "postgresql" | "mariadb";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
