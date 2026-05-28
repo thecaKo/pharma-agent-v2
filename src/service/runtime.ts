@@ -481,7 +481,7 @@ export class ConnectorRuntime {
         {
           requestId: correlationId,
           command,
-          tables: snapshot.map((table) => table.name)
+          payload: { tables: snapshot.map((table) => table.name) }
         },
         this.now()
       );

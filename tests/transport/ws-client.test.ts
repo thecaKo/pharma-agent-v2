@@ -678,7 +678,7 @@ describe("WebSocketTransportClient", () => {
         {
           requestId: "req-1",
           command: "schema.listTables",
-          tables: ["products"]
+          payload: { tables: ["products"] }
         },
         "2026-05-16T20:00:04.000Z"
       )
@@ -728,7 +728,7 @@ describe("WebSocketTransportClient", () => {
           {
             requestId: message.requestId,
             command: message.command,
-            tables: ["products", "inventory"]
+            payload: { tables: ["products", "inventory"] }
           },
           "2026-05-16T20:00:05.000Z"
         )
@@ -749,7 +749,7 @@ describe("WebSocketTransportClient", () => {
         command: "schema.listTables",
         ok: true,
         payload: {
-          tables: ["inventory", "products"]
+          tables: ["products", "inventory"]
         }
       }
     });

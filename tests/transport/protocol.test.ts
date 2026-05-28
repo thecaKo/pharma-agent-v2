@@ -426,7 +426,7 @@ describe("transport protocol", () => {
       {
         requestId: "req-1",
         command: "schema.listTables",
-        tables: ["products", "inventory"]
+        payload: { tables: ["products", "inventory"] }
       },
       "2026-05-16T20:00:01.000Z"
     );
@@ -437,7 +437,7 @@ describe("transport protocol", () => {
       command: "schema.listTables",
       ok: true,
       payload: {
-        tables: ["inventory", "products"]
+        tables: ["products", "inventory"]
       },
       sentAt: "2026-05-16T20:00:01.000Z"
     });
@@ -615,6 +615,74 @@ describe("transport protocol", () => {
     expect(serialized).not.toContain("secret-password");
     expect(serialized).not.toContain("connectorToken");
     expect(serialized).not.toContain("databasePassword");
+  });
+});
+
+describe("admin.request with input payload", () => {
+  it("parses probe.engines admin request with empty input", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-1",
+      command: "probe.engines",
+      input: {}
+    });
+    const msg = parseServerMessage(raw);
+    expect(msg).toMatchObject({
+      type: "admin.request",
+      requestId: "req-1",
+      command: "probe.engines",
+      input: {}
+    });
+  });
+
+  it("parses probe.test_connection admin request with input payload", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-2",
+      command: "probe.test_connection",
+      input: { driver: "sqlserver", host: "10.0.0.1", port: 1433, database: "db", user: "u", password: "p" }
+    });
+    const msg = parseServerMessage(raw);
+    expect(msg).toMatchObject({
+      type: "admin.request",
+      command: "probe.test_connection",
+      input: { driver: "sqlserver" }
+    });
+  });
+
+  it("rejects unknown admin command", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-3",
+      command: "probe.unknown"
+    });
+    expect(() => parseServerMessage(raw)).toThrow(/Unsupported admin command/);
+  });
+
+  it("still accepts schema.listTables for backward compatibility", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-4",
+      command: "schema.listTables"
+    });
+    const msg = parseServerMessage(raw);
+    expect(msg).toMatchObject({ command: "schema.listTables" });
+  });
+
+  it("builds success response with arbitrary payload shape", () => {
+    const built = buildAdminSuccessResponseMessage({
+      requestId: "req-5",
+      command: "probe.engines",
+      payload: { engines: [{ kind: "sqlserver", confidence: "high", evidence: [] }] },
+      probeVersion: "1"
+    });
+    expect(built).toMatchObject({
+      type: "admin.response",
+      command: "probe.engines",
+      ok: true,
+      payload: { engines: [{ kind: "sqlserver" }] },
+      probeVersion: "1"
+    });
   });
 });
 

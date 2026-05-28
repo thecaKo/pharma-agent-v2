@@ -8,7 +8,12 @@ import type { PostgresDsnCandidate } from "../db/dsn-discovery.js";
 export type ServerMessageType = "connector.config" | "batch.ack" | "config.updated" | "admin.request";
 export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response" | "connector.discovery";
 export type BatchNextAction = "continue" | "retry" | "reload_config";
-export type AdminCommand = "schema.listTables";
+export type AdminCommand =
+  | "schema.listTables"
+  | "probe.engines"
+  | "probe.odbc_dsns"
+  | "probe.network"
+  | "probe.test_connection";
 
 export interface ConnectorConfigMessage {
   type: "connector.config";
@@ -40,6 +45,7 @@ export interface AdminRequestMessage {
   type: "admin.request";
   requestId: string;
   command: AdminCommand;
+  input?: unknown;
   sentAt?: string;
 }
 
@@ -114,9 +120,7 @@ export interface ConnectorDiscoveryMessage {
   dsns: PostgresDsnCandidate[];
 }
 
-export interface AdminResponseSuccessPayload {
-  tables: string[];
-}
+export type AdminResponseSuccessPayload = unknown;
 
 export interface AdminResponseErrorPayload {
   errorCode: string;
@@ -128,6 +132,7 @@ interface AdminResponseBaseMessage {
   requestId: string;
   command: AdminCommand;
   sentAt: string;
+  probeVersion?: string;
 }
 
 export interface AdminResponseSuccessMessage extends AdminResponseBaseMessage {
@@ -196,13 +201,11 @@ export function parseAdminResponseMessage(raw: string | Buffer | ArrayBuffer | B
   const ok = expectBoolean(message.ok, "ok");
 
   if (ok) {
-    const payload = expectRecord(message.payload, "payload");
     return {
       ...base,
       ok,
-      payload: {
-        tables: expectStringArray(payload.tables, "payload.tables")
-      }
+      payload: message.payload as AdminResponseSuccessPayload,
+      ...(typeof message.probeVersion === "string" ? { probeVersion: message.probeVersion } : {})
     };
   }
 
@@ -374,20 +377,23 @@ export function buildAdminSuccessResponseMessage(
   input: {
     requestId: string;
     command: AdminCommand;
-    tables: readonly string[];
+    payload: AdminResponseSuccessPayload;
+    probeVersion?: string;
   },
   sentAt = new Date().toISOString()
 ): AdminResponseMessage {
-  return {
+  const message: AdminResponseSuccessMessage = {
     type: "admin.response",
     requestId: validateRequestId(input.requestId),
     command: input.command,
     ok: true,
-    payload: {
-      tables: [...input.tables].sort((left, right) => left.localeCompare(right))
-    },
+    payload: input.payload,
     sentAt
   };
+  if (input.probeVersion !== undefined) {
+    message.probeVersion = input.probeVersion;
+  }
+  return message;
 }
 
 export function buildAdminErrorResponseMessage(
@@ -451,21 +457,33 @@ function parseConfigUpdated(message: Record<string, unknown>): ConfigUpdatedMess
   };
 }
 
+const ADMIN_COMMANDS = new Set<AdminCommand>([
+  "schema.listTables",
+  "probe.engines",
+  "probe.odbc_dsns",
+  "probe.network",
+  "probe.test_connection"
+]);
+
+function parseAdminCommand(value: unknown): AdminCommand {
+  const command = expectString(value, "command");
+  if (!ADMIN_COMMANDS.has(command as AdminCommand)) {
+    throw new ProtocolParseError(`Unsupported admin command: ${command}`);
+  }
+  return command as AdminCommand;
+}
+
 function parseAdminRequest(message: Record<string, unknown>): AdminRequestMessage {
-  return {
+  const base: AdminRequestMessage = {
     type: "admin.request",
     requestId: validateRequestId(expectString(message.requestId, "requestId")),
     command: parseAdminCommand(message.command),
     sentAt: optionalString(message.sentAt, "sentAt")
   };
-}
-
-function parseAdminCommand(value: unknown): AdminCommand {
-  const command = expectString(value, "command");
-  if (command !== "schema.listTables") {
-    throw new ProtocolParseError("Unsupported admin command");
+  if (message.input !== undefined) {
+    base.input = message.input;
   }
-  return command;
+  return base;
 }
 
 function parseMapping(value: unknown): ValidatedMappingConfig {

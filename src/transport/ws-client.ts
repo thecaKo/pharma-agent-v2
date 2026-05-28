@@ -106,6 +106,10 @@ export type WebSocketTransportEvent =
   | "fileDiscoveryScanRequest"
   | "setupConfigRequest";
 
+function isTablesPayload(payload: unknown): payload is { tables: unknown[] } {
+  return typeof payload === "object" && payload !== null && Array.isArray((payload as { tables?: unknown }).tables);
+}
+
 const DEFAULT_RETRY_POLICY: RetryPolicyOptions = {
   baseDelayMs: 500,
   maxDelayMs: 30_000,
@@ -240,7 +244,7 @@ export class WebSocketTransportClient extends EventEmitter {
       requestId: message.requestId,
       command: message.command,
       ok: message.ok,
-      tableCount: message.ok ? message.payload.tables.length : undefined
+      tableCount: message.ok && isTablesPayload(message.payload) ? message.payload.tables.length : undefined
     });
   }
 
