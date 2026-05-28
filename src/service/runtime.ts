@@ -52,6 +52,7 @@ import {
   type SchemaDiscoveryTable
 } from "../transport/schema-discovery.js";
 import { WebSocketTransportClient } from "../transport/ws-client.js";
+import { BootstrapState } from "./bootstrap-state.js";
 import { handleAdminRequest, type AdminRouterDependencies } from "../discovery/admin-router.js";
 import { probeEngines } from "../discovery/engines.js";
 import { probeOdbcDsns } from "../discovery/odbc-dsns.js";
@@ -84,6 +85,12 @@ export interface RuntimeTransport {
     lastSuccessfulSendAt?: string;
     lastErrorCode?: string;
     sentAt?: string;
+    state: "bootstrap" | "synced";
+    bootstrap?: {
+      probesRunTotal: number;
+      lastProbeAt?: string;
+      lastProbeError?: { command: string; code: string };
+    };
   }): void;
   sendConnectorError(input: ConnectorErrorPayload, sentAt?: string): void;
   sendAdminResponse(message: AdminResponseMessage): void;
@@ -174,6 +181,7 @@ export class ConnectorRuntime {
   private readonly discoveryTimeoutMs: number;
   private discoverySnapshotPromise?: Promise<PostgresDsnCandidate[]>;
   private hasEmittedDiscoverySnapshot = false;
+  private readonly bootstrapState = new BootstrapState();
 
   public constructor(options: ConnectorRuntimeOptions = {}) {
     this.env = options.env;
@@ -957,7 +965,8 @@ export class ConnectorRuntime {
 
     const envelope = buildConnectorDiscoveryMessage({
       platform: process.platform,
-      dsns
+      dsns,
+      mode: this.currentMode()
     });
 
     try {
@@ -969,14 +978,21 @@ export class ConnectorRuntime {
     }
   }
 
+  private currentMode(): "bootstrap" | "synced" {
+    return this.config.database ? "synced" : "bootstrap";
+  }
+
   private sendHeartbeat(lastSuccessfulSendAt?: string): void {
     try {
+      const mode = this.currentMode();
       this.transport.sendHeartbeat({
         connectorVersion: CONNECTOR_VERSION,
         mappingVersion: this.activeMapping?.mappingVersion,
         lastSuccessfulSendAt,
         lastErrorCode: this.lastErrorCode,
-        sentAt: this.now()
+        sentAt: this.now(),
+        state: mode,
+        ...(mode === "bootstrap" ? { bootstrap: this.bootstrapState.snapshot() } : {})
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

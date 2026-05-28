@@ -58,6 +58,12 @@ export interface HeartbeatPayload {
   lastSuccessfulSendAt?: string;
   lastErrorCode?: string;
   reconnectAttemptCount: number;
+  state: "bootstrap" | "synced";
+  bootstrap?: {
+    probesRunTotal: number;
+    lastProbeAt?: string;
+    lastProbeError?: { command: string; code: string };
+  };
 }
 
 export interface ConnectorHeartbeatMessage {
@@ -117,6 +123,7 @@ export interface ConnectorDiscoveryMessage {
   type: "connector.discovery";
   scannedAt: string;
   platform: string;
+  mode: "bootstrap" | "synced";
   dsns: PostgresDsnCandidate[];
 }
 
@@ -257,6 +264,7 @@ export function buildConnectorDiscoveryMessage(
   input: {
     platform: string;
     dsns: PostgresDsnCandidate[];
+    mode: "bootstrap" | "synced";
     scannedAt?: string;
   }
 ): ConnectorDiscoveryMessage {
@@ -264,6 +272,7 @@ export function buildConnectorDiscoveryMessage(
     type: "connector.discovery",
     scannedAt: input.scannedAt ?? new Date().toISOString(),
     platform: input.platform,
+    mode: input.mode,
     dsns: input.dsns
   };
 }

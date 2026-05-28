@@ -10,7 +10,8 @@ describe("buildHeartbeatPayload", () => {
         mappingVersion: "mapping-v1",
         lastSuccessfulSendAt: "2026-05-16T20:00:00.000Z",
         lastErrorCode: "LAST_ERROR",
-        reconnectAttemptCount: 3
+        reconnectAttemptCount: 3,
+        state: "synced"
       })
     ).toEqual({
       connectorVersion: "0.1.0-test",
@@ -18,7 +19,8 @@ describe("buildHeartbeatPayload", () => {
       mappingVersion: "mapping-v1",
       lastSuccessfulSendAt: "2026-05-16T20:00:00.000Z",
       lastErrorCode: "LAST_ERROR",
-      reconnectAttemptCount: 3
+      reconnectAttemptCount: 3,
+      state: "synced"
     });
   });
 });

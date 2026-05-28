@@ -479,7 +479,8 @@ describe("WebSocketTransportClient", () => {
       connectorVersion: "0.1.0-test",
       mappingVersion: "mapping-v1",
       lastSuccessfulSendAt: "2026-05-16T20:00:00.000Z",
-      sentAt: "2026-05-16T20:00:01.000Z"
+      sentAt: "2026-05-16T20:00:01.000Z",
+      state: "synced"
     });
 
     await expect(server.nextMessage()).resolves.toMatchObject({
@@ -491,7 +492,8 @@ describe("WebSocketTransportClient", () => {
           online: true,
           mappingVersion: "mapping-v1",
           lastSuccessfulSendAt: "2026-05-16T20:00:00.000Z",
-          reconnectAttemptCount: 0
+          reconnectAttemptCount: 0,
+          state: "synced"
         }
       }
     });
@@ -593,7 +595,8 @@ describe("WebSocketTransportClient", () => {
 
     client.sendHeartbeat({
       connectorVersion: "0.1.0-test",
-      sentAt: "2026-05-16T20:00:02.000Z"
+      sentAt: "2026-05-16T20:00:02.000Z",
+      state: "synced"
     });
     const heartbeat = await server.nextMessage();
 

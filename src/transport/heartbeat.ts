@@ -9,17 +9,22 @@ export interface BuildHeartbeatInput {
   reconnectAttemptCount: number;
   connectorVersion?: string;
   sentAt?: string;
+  state: "bootstrap" | "synced";
+  bootstrap?: HeartbeatPayload["bootstrap"];
 }
 
 export function buildHeartbeatPayload(input: BuildHeartbeatInput): HeartbeatPayload {
-  return {
+  const payload: HeartbeatPayload = {
     connectorVersion: input.connectorVersion ?? CONNECTOR_VERSION,
     online: input.online,
     mappingVersion: input.mappingVersion,
     lastSuccessfulSendAt: input.lastSuccessfulSendAt,
     lastErrorCode: input.lastErrorCode,
-    reconnectAttemptCount: input.reconnectAttemptCount
+    reconnectAttemptCount: input.reconnectAttemptCount,
+    state: input.state
   };
+  if (input.bootstrap) payload.bootstrap = input.bootstrap;
+  return payload;
 }
 
 export function buildHeartbeatMessage(input: BuildHeartbeatInput): ConnectorHeartbeatMessage {

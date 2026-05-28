@@ -694,11 +694,13 @@ describe("buildConnectorDiscoveryMessage", () => {
     const message = buildConnectorDiscoveryMessage({
       platform: "win32",
       dsns,
+      mode: "synced",
       scannedAt: "2026-05-27T12:00:00.000Z"
     });
     expect(message).toEqual({
       type: "connector.discovery",
       platform: "win32",
+      mode: "synced",
       scannedAt: "2026-05-27T12:00:00.000Z",
       dsns: [
         { dsnName: "VetorFarma", host: "127.0.0.1", port: 5432, database: "vf", user: "vfuser" }
@@ -708,7 +710,7 @@ describe("buildConnectorDiscoveryMessage", () => {
 
   it("defaults scannedAt to now when not provided", () => {
     const before = new Date().toISOString();
-    const message = buildConnectorDiscoveryMessage({ platform: "linux", dsns: [] });
+    const message = buildConnectorDiscoveryMessage({ platform: "linux", dsns: [], mode: "bootstrap" });
     const after = new Date().toISOString();
     expect(message.scannedAt >= before && message.scannedAt <= after).toBe(true);
   });
@@ -717,7 +719,7 @@ describe("buildConnectorDiscoveryMessage", () => {
     const dsns: PostgresDsnCandidate[] = [
       { dsnName: "Risky", host: "host", user: "u" }
     ];
-    const message = buildConnectorDiscoveryMessage({ platform: "win32", dsns });
+    const message = buildConnectorDiscoveryMessage({ platform: "win32", dsns, mode: "synced" });
     const json = serializeConnectorMessage(message);
     expect(json).not.toContain("password");
     expect(json).not.toContain("Password");
