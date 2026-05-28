@@ -1047,6 +1047,33 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
         query: async (sql, params) => connection.query(sql, [...(params as unknown[])]),
         end: () => connection.end()
       };
+    },
+    sqlserverConnectionFactory: async (config) => {
+      const mssql = await importUnknownModule("mssql");
+      const sql = (mssql as any).default ?? mssql;
+      const pool = new sql.ConnectionPool({
+        server: config.server,
+        ...(config.port !== undefined ? { port: config.port } : {}),
+        database: config.database,
+        user: config.user,
+        password: config.password,
+        options: {
+          encrypt: config.encrypt,
+          trustServerCertificate: config.trustServerCertificate
+        }
+      });
+      await pool.connect();
+      return {
+        query: async (sqlText: string, params: Record<string, unknown>) => {
+          const request = pool.request();
+          for (const [name, value] of Object.entries(params)) {
+            request.input(name, value);
+          }
+          const result = await request.query(sqlText);
+          return { recordset: result.recordset };
+        },
+        close: () => pool.close()
+      };
     }
   };
 }
