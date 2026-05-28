@@ -1,5 +1,7 @@
 import type { ProbeErrorCode } from "./types.js";
 
+export type { ProbeErrorCode } from "./types.js";
+
 export class DriverMissingError extends Error {
   public readonly driver: string;
 

@@ -35,13 +35,13 @@ export async function handleAdminRequest(
       }
       case "probe.network": {
         const input = validateNetworkInput(req.input);
-        if (input.error) return invalidInput(req, input.error);
+        if (!input.ok) return invalidInput(req, input.error);
         const result = await deps.probeNetwork(input.value);
         return success(req, result);
       }
       case "probe.test_connection": {
         const input = validateTestConnectionInput(req.input);
-        if (input.error) return invalidInput(req, input.error);
+        if (!input.ok) return invalidInput(req, input.error);
         const result = await deps.probeTestConnection(input.value);
         return success(req, result);
       }
@@ -83,28 +83,28 @@ function invalidInput(req: AdminRequestMessage, message: string): AdminResponseM
   });
 }
 
-type Validated<T> = { value: T; error?: undefined } | { value?: undefined; error: string };
+type Validated<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function validateNetworkInput(input: unknown): Validated<ProbeNetworkInput> {
-  if (!isRecord(input)) return { error: "input must be an object" };
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
   const host = input.host;
   const port = input.port;
   const timeoutMs = input.timeoutMs ?? 3000;
-  if (typeof host !== "string" || host.length === 0) return { error: "input.host must be a non-empty string" };
+  if (typeof host !== "string" || host.length === 0) return { ok: false, error: "input.host must be a non-empty string" };
   if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
-    return { error: "input.port must be an integer between 1 and 65535" };
+    return { ok: false, error: "input.port must be an integer between 1 and 65535" };
   }
   if (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1) {
-    return { error: "input.timeoutMs must be a positive integer" };
+    return { ok: false, error: "input.timeoutMs must be a positive integer" };
   }
-  return { value: { host, port, timeoutMs } };
+  return { ok: true, value: { host, port, timeoutMs } };
 }
 
 function validateTestConnectionInput(input: unknown): Validated<TestConnectionInput> {
-  if (!isRecord(input)) return { error: "input must be an object" };
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
   const driver = input.driver;
   if (typeof driver !== "string" || driver.length === 0) {
-    return { error: "input.driver is required" };
+    return { ok: false, error: "input.driver is required" };
   }
   const out: TestConnectionInput = { driver: driver as TestConnectionInput["driver"] };
   for (const key of ["host", "instance", "database", "user", "password", "dsn", "connectionString"] as const) {
@@ -115,7 +115,7 @@ function validateTestConnectionInput(input: unknown): Validated<TestConnectionIn
   if (typeof input.trustServerCertificate === "boolean") {
     out.trustServerCertificate = input.trustServerCertificate;
   }
-  return { value: out };
+  return { ok: true, value: out };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
