@@ -3,6 +3,7 @@ import { createSourceDatabaseAdapter, UnsupportedDatabaseDriverError } from "../
 import { FirebirdSourceAdapter } from "../../src/db/firebird-adapter.js";
 import { MySqlSourceAdapter } from "../../src/db/mysql-adapter.js";
 import { PostgresSourceAdapter } from "../../src/db/postgresql-adapter.js";
+import { MariaDbSourceAdapter } from "../../src/db/mariadb-adapter.js";
 import type { DatabaseConfig } from "../../src/config/types.js";
 
 const mysqlConfig: DatabaseConfig = {
@@ -26,10 +27,17 @@ const postgresConfig: DatabaseConfig = {
   port: 5432
 };
 
+const mariadbConfig: DatabaseConfig = {
+  ...mysqlConfig,
+  driver: "mariadb",
+  port: 3306
+};
+
 const dependencies = () => ({
   mysqlConnectionFactory: vi.fn(),
   firebirdConnectionFactory: vi.fn(),
-  postgresConnectionFactory: vi.fn()
+  postgresConnectionFactory: vi.fn(),
+  mariadbConnectionFactory: vi.fn()
 });
 
 describe("createSourceDatabaseAdapter", () => {
@@ -55,6 +63,14 @@ describe("createSourceDatabaseAdapter", () => {
       dependencies: dependencies()
     });
     expect(adapter).toBeInstanceOf(PostgresSourceAdapter);
+  });
+
+  it("returns MariaDB adapter when DB_DRIVER=mariadb", () => {
+    const adapter = createSourceDatabaseAdapter({
+      config: mariadbConfig,
+      dependencies: dependencies()
+    });
+    expect(adapter).toBeInstanceOf(MariaDbSourceAdapter);
   });
 
   it("rejects unsupported drivers before polling starts", () => {
