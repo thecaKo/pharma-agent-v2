@@ -32,4 +32,9 @@ export interface SourceDatabaseAdapter {
   listColumns(tableName: string): Promise<DatabaseColumn[]>;
 }
 
-export type SourceDatabaseAdapterKind = "mysql" | "firebird" | "postgresql" | "mariadb";
+export type SourceDatabaseAdapterKind =
+  | "mysql"
+  | "firebird"
+  | "postgresql"
+  | "mariadb"
+  | "sqlserver";
