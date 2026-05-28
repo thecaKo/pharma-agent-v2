@@ -24,7 +24,9 @@ CLI when needed). Production product mapping stays owned by the central panel.
 **`npm run database-setup --`** starts with a choice between **manual connection**
 (recommended when host, port, database, user, and password are known) and **local
 database discovery** (optional metadata scan for candidate files). Manual setup
-supports **MySQL**, **Firebird**, and **PostgreSQL** without selecting a discovered file. Discovery
+supports **MySQL**, **MariaDB**, **Firebird**, **PostgreSQL**, and **SQL Server**
+(`DB_DRIVER=sqlserver`, com `DB_INSTANCE=<name>` opcional para named instances) without
+selecting a discovered file. Discovery
 runs only when you choose that path; use `--root <path>` to limit the scan. The CLI
 does not print database passwords or connector tokens, and passwords stay out of the
 onboarding JSON artifact.
