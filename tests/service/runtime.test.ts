@@ -72,6 +72,94 @@ describe("ConnectorRuntime", () => {
     );
   });
 
+  it("transitions from bootstrap to synced when applyBootstrapDbConfig is called with a valid config", async () => {
+    const transport = new FakeTransport();
+    const logger = silentLogger();
+    const fakeAdapter = adapterWithRows([]);
+    const adapterDependencies = {
+      mysqlConnectionFactory: vi.fn(async () => ({ query: vi.fn(), end: vi.fn() })),
+      firebirdConnectionFactory: vi.fn(),
+      postgresConnectionFactory: vi.fn(),
+      mariadbConnectionFactory: vi.fn(),
+      sqlserverConnectionFactory: vi.fn()
+    } as never;
+
+    const tempDir = await mkdtemp(join(tmpdir(), "pharma-bootstrap-"));
+
+    const runtime = new ConnectorRuntime({
+      env: validEnv({
+        DB_DRIVER: undefined,
+        DB_HOST: undefined,
+        DB_PORT: undefined,
+        DB_NAME: undefined,
+        DB_USER: undefined,
+        DB_PASSWORD: undefined,
+        PROGRAMDATA: tempDir
+      }),
+      allowMissingDatabaseConfig: true,
+      logger,
+      transport,
+      adapter: fakeAdapter,
+      adapterDependencies,
+      stateStore: new StateStore({ stateFilePath: join(tmpdir(), `runtime-${randomUUID()}.json`) })
+    });
+
+    await runtime.start();
+    expect(runtime.getState().config.database).toBeUndefined();
+
+    await runtime.applyBootstrapDbConfig({
+      type: "connector.bootstrap.dbConfig",
+      requestId: "boot-test-1",
+      database: {
+        driver: "sqlserver",
+        host: "10.0.0.1",
+        port: 1433,
+        name: "BIG",
+        user: "ro",
+        password: "p"
+      }
+    });
+
+    expect(runtime.getState().config.database).toMatchObject({
+      driver: "sqlserver",
+      host: "10.0.0.1",
+      port: 1433
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      "bootstrap.transitioned_to_synced",
+      expect.objectContaining({ dbDriver: "sqlserver" })
+    );
+  });
+
+  it("ignores applyBootstrapDbConfig when runtime is already synced", async () => {
+    const transport = new FakeTransport();
+    const logger = silentLogger();
+    const adapter = adapterWithRows([]);
+    const runtime = createRuntime({ transport, adapter, logger });
+
+    await runtime.start();
+    // Already has DB config from validEnv()
+    expect(runtime.getState().config.database).toBeDefined();
+
+    await runtime.applyBootstrapDbConfig({
+      type: "connector.bootstrap.dbConfig",
+      requestId: "boot-test-2",
+      database: {
+        driver: "mysql",
+        host: "x", port: 3306, name: "y", user: "u", password: "p"
+      }
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "bootstrap.db_config_ignored",
+      expect.objectContaining({ reason: "already_synced", requestId: "boot-test-2" })
+    );
+    // DB config remains the original from validEnv (NOT replaced by the attempted config)
+    // validEnv() sets DB_HOST to "localhost", so if host is still "localhost" the config was not overwritten
+    expect(runtime.getState().config.database?.host).toBe("localhost");
+    expect(runtime.getState().config.database?.host).not.toBe("x");
+  });
+
   it("closes transport when runtime startup fails", async () => {
     const transport = new FakeTransport();
     transport.connect.mockRejectedValueOnce(new Error("connect failed"));
