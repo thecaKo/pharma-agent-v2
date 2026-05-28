@@ -417,11 +417,13 @@ export class WebSocketTransportClient extends EventEmitter {
           command: message.command
         });
         this.emit("adminRequest", message);
-        this.emit("schemaDiscoveryRequest", {
-          responseFormat: "admin",
-          correlationId: message.requestId,
-          command: message.command
-        } satisfies SchemaDiscoveryRequest);
+        if (message.command === "schema.listTables") {
+          this.emit("schemaDiscoveryRequest", {
+            responseFormat: "admin",
+            correlationId: message.requestId,
+            command: message.command
+          } satisfies SchemaDiscoveryRequest);
+        }
         return;
     }
   }
