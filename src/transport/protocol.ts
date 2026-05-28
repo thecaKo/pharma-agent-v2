@@ -4,8 +4,14 @@ import type { CursorValue } from "../state/state-types.js";
 import { redactString } from "../logging/redact.js";
 import { normalizeCatalogConfigPushMessage } from "./catalog-config-push.js";
 import type { PostgresDsnCandidate } from "../db/dsn-discovery.js";
+import type { DatabaseDriver } from "../config/types.js";
 
-export type ServerMessageType = "connector.config" | "batch.ack" | "config.updated" | "admin.request";
+export type ServerMessageType =
+  | "connector.config"
+  | "batch.ack"
+  | "config.updated"
+  | "admin.request"
+  | "connector.bootstrap.dbConfig";
 export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response" | "connector.discovery";
 export type BatchNextAction = "continue" | "retry" | "reload_config";
 export type AdminCommand =
@@ -49,7 +55,28 @@ export interface AdminRequestMessage {
   sentAt?: string;
 }
 
-export type ServerMessage = ConnectorConfigMessage | BatchAckMessage | ConfigUpdatedMessage | AdminRequestMessage;
+export interface BootstrapDbConfigMessage {
+  type: "connector.bootstrap.dbConfig";
+  requestId: string;
+  database: {
+    driver: DatabaseDriver;
+    host: string;
+    port: number;
+    name: string;
+    user: string;
+    password: string;
+    instance?: string;
+    trustServerCertificate?: boolean;
+  };
+  sentAt?: string;
+}
+
+export type ServerMessage =
+  | ConnectorConfigMessage
+  | BatchAckMessage
+  | ConfigUpdatedMessage
+  | AdminRequestMessage
+  | BootstrapDbConfigMessage;
 
 export interface HeartbeatPayload {
   connectorVersion: string;
@@ -182,6 +209,8 @@ export function parseServerMessage(raw: string | Buffer | ArrayBuffer | Buffer[]
       return parseConfigUpdated(message);
     case "admin.request":
       return parseAdminRequest(message);
+    case "connector.bootstrap.dbConfig":
+      return parseBootstrapDbConfig(message);
     default:
       throw new ProtocolParseError(`Unsupported server message type: ${type}`);
   }
@@ -493,6 +522,35 @@ function parseAdminRequest(message: Record<string, unknown>): AdminRequestMessag
     base.input = message.input;
   }
   return base;
+}
+
+function parseBootstrapDbConfig(message: Record<string, unknown>): BootstrapDbConfigMessage {
+  const database = expectRecord(message.database, "database");
+  const driver = expectString(database.driver, "database.driver");
+  if (!["mysql", "firebird", "postgresql", "mariadb", "sqlserver"].includes(driver)) {
+    throw new ProtocolParseError(`database.driver must be a supported driver, got ${driver}`);
+  }
+  const hasInstance = typeof database.instance === "string" && database.instance.length > 0;
+  const port = hasInstance && driver === "sqlserver" ? 0 : expectPositiveInteger(database.port, "database.port");
+
+  const result: BootstrapDbConfigMessage = {
+    type: "connector.bootstrap.dbConfig",
+    requestId: validateRequestId(expectString(message.requestId, "requestId")),
+    database: {
+      driver: driver as DatabaseDriver,
+      host: expectString(database.host, "database.host"),
+      port,
+      name: expectString(database.name, "database.name"),
+      user: expectString(database.user, "database.user"),
+      password: expectString(database.password, "database.password")
+    },
+    sentAt: optionalString(message.sentAt, "sentAt")
+  };
+  if (hasInstance) result.database.instance = database.instance as string;
+  if (typeof database.trustServerCertificate === "boolean") {
+    result.database.trustServerCertificate = database.trustServerCertificate;
+  }
+  return result;
 }
 
 function parseMapping(value: unknown): ValidatedMappingConfig {

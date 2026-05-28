@@ -686,6 +686,55 @@ describe("admin.request with input payload", () => {
   });
 });
 
+describe("connector.bootstrap.dbConfig", () => {
+  it("parses a valid bootstrap db config message", () => {
+    const raw = JSON.stringify({
+      type: "connector.bootstrap.dbConfig",
+      requestId: "boot-1",
+      database: {
+        driver: "sqlserver",
+        host: "10.0.0.1",
+        port: 1433,
+        name: "BIG",
+        user: "ro",
+        password: "p"
+      }
+    });
+    const msg = parseServerMessage(raw);
+    expect(msg).toMatchObject({
+      type: "connector.bootstrap.dbConfig",
+      requestId: "boot-1",
+      database: { driver: "sqlserver", host: "10.0.0.1", port: 1433 }
+    });
+  });
+
+  it("accepts sqlserver instance instead of port", () => {
+    const raw = JSON.stringify({
+      type: "connector.bootstrap.dbConfig",
+      requestId: "boot-2",
+      database: {
+        driver: "sqlserver",
+        host: "10.0.0.1",
+        instance: "SQLEXPRESS",
+        name: "BIG",
+        user: "ro",
+        password: "p"
+      }
+    });
+    const msg = parseServerMessage(raw);
+    expect(msg).toMatchObject({ database: { instance: "SQLEXPRESS" } });
+  });
+
+  it("rejects when driver is missing", () => {
+    const raw = JSON.stringify({
+      type: "connector.bootstrap.dbConfig",
+      requestId: "boot-3",
+      database: { host: "h", port: 1, name: "n", user: "u", password: "p" }
+    });
+    expect(() => parseServerMessage(raw)).toThrow(/driver/);
+  });
+});
+
 describe("buildConnectorDiscoveryMessage", () => {
   it("builds a connector.discovery envelope with platform, scannedAt and dsns", () => {
     const dsns: PostgresDsnCandidate[] = [
