@@ -88,12 +88,57 @@ describe("loadConfig", () => {
     expect(config.database.port).toBe(3306);
   });
 
+  it("accepts sqlserver as a valid DB_DRIVER", () => {
+    const config = loadConfig(validEnv({ DB_DRIVER: "sqlserver", DB_PORT: "1433" }));
+
+    expect(config.database.driver).toBe("sqlserver");
+    expect(config.database.port).toBe(1433);
+  });
+
+  it("accepts DB_INSTANCE for sqlserver and omits port from config when instance is set", () => {
+    const env = validEnv({ DB_DRIVER: "sqlserver", DB_INSTANCE: "SQLEXPRESS" });
+    delete env.DB_PORT;
+
+    const config = loadConfig(env);
+
+    expect(config.database.driver).toBe("sqlserver");
+    expect(config.database.instance).toBe("SQLEXPRESS");
+  });
+
+  it("accepts DB_TRUST_SERVER_CERTIFICATE=true for sqlserver", () => {
+    const config = loadConfig(
+      validEnv({ DB_DRIVER: "sqlserver", DB_PORT: "1433", DB_TRUST_SERVER_CERTIFICATE: "true" })
+    );
+
+    expect(config.database.trustServerCertificate).toBe(true);
+  });
+
+  it("rejects DB_INSTANCE together with DB_PORT for sqlserver", () => {
+    try {
+      loadConfig(validEnv({ DB_DRIVER: "sqlserver", DB_PORT: "1433", DB_INSTANCE: "SQLEXPRESS" }));
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError);
+      expect(String(error)).toContain("DB_INSTANCE cannot be combined with DB_PORT");
+    }
+  });
+
+  it("rejects DB_INSTANCE for non-sqlserver drivers", () => {
+    try {
+      loadConfig(validEnv({ DB_DRIVER: "postgresql", DB_PORT: "5432", DB_INSTANCE: "OLD" }));
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError);
+      expect(String(error)).toContain("DB_INSTANCE is only valid for DB_DRIVER=sqlserver");
+    }
+  });
+
   it("rejects unsupported database drivers with a descriptive non-secret error", () => {
     try {
       loadConfig(validEnv({ DB_DRIVER: "oracle" }));
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigValidationError);
-      expect(String(error)).toContain("DB_DRIVER must be mysql, firebird, postgresql, or mariadb");
+      expect(String(error)).toContain(
+        "DB_DRIVER must be mysql, firebird, postgresql, mariadb, or sqlserver"
+      );
       expect(String(error)).not.toContain("test-connector-token");
       expect(String(error)).not.toContain("test-db-password");
     }

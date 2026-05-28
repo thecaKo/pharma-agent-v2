@@ -29,7 +29,7 @@ export interface LoadConfigOptions {
   requireDatabase?: boolean;
 }
 
-const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird", "postgresql", "mariadb"]);
+const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird", "postgresql", "mariadb", "sqlserver"]);
 const LOG_LEVELS = new Set<LogLevel>(["debug", "info", "warn", "error"]);
 
 function parsePositiveInteger(
@@ -90,8 +90,16 @@ export function loadConfig(
     issues
   );
 
+  const rawInstance = env.DB_INSTANCE?.trim();
+  const rawTrustServerCert = env.DB_TRUST_SERVER_CERTIFICATE?.trim().toLowerCase();
+  const driverValue = readRequired(env, "DB_DRIVER");
+  const sqlserverWithInstance = driverValue === "sqlserver" && !!rawInstance;
+
   for (const field of REQUIRED_ENV) {
     if (!requireDatabase && isDatabaseField(field)) {
+      continue;
+    }
+    if (field === "DB_PORT" && sqlserverWithInstance) {
       continue;
     }
     if (!readRequired(env, field)) {
@@ -126,15 +134,34 @@ export function loadConfig(
     }
   }
 
-  const driver = readRequired(env, "DB_DRIVER");
+  const driver = driverValue;
   if (driver && !DATABASE_DRIVERS.has(driver as DatabaseDriver)) {
-    issues.push({ field: "DB_DRIVER", message: "must be mysql, firebird, postgresql, or mariadb" });
+    issues.push({ field: "DB_DRIVER", message: "must be mysql, firebird, postgresql, mariadb, or sqlserver" });
+  }
+
+  if (rawInstance && driver !== "sqlserver") {
+    issues.push({
+      field: "DB_INSTANCE",
+      message: "DB_INSTANCE is only valid for DB_DRIVER=sqlserver"
+    });
+  }
+
+  if (rawInstance && env.DB_PORT && env.DB_PORT.trim().length > 0) {
+    issues.push({
+      field: "DB_INSTANCE",
+      message: "DB_INSTANCE cannot be combined with DB_PORT (SQL Browser resolves the port)"
+    });
   }
 
   const portValue = readRequired(env, "DB_PORT");
-  const port = Number(portValue);
-  if (portValue && (!Number.isInteger(port) || port <= 0 || port > 65535)) {
-    issues.push({ field: "DB_PORT", message: "must be a valid TCP port" });
+  let port = 0;
+  if (portValue) {
+    const parsedPort = Number(portValue);
+    if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
+      issues.push({ field: "DB_PORT", message: "must be a valid TCP port" });
+    } else {
+      port = parsedPort;
+    }
   }
 
   const logLevel = normalizeOptional(env.LOG_LEVEL, "info");
@@ -146,17 +173,27 @@ export function loadConfig(
     throw new ConfigValidationError(issues);
   }
 
+  const database: DatabaseConfig = {
+    driver: driver as DatabaseDriver,
+    host: readRequired(env, "DB_HOST"),
+    port,
+    name: readRequired(env, "DB_NAME"),
+    user: readRequired(env, "DB_USER"),
+    password: readRequired(env, "DB_PASSWORD")
+  };
+
+  if (rawInstance) {
+    database.instance = rawInstance;
+  }
+
+  if (rawTrustServerCert !== undefined) {
+    database.trustServerCertificate = rawTrustServerCert === "true" || rawTrustServerCert === "1";
+  }
+
   return {
     connectorToken: readRequired(env, "CONNECTOR_TOKEN"),
     websocketUrl: readRequired(env, "CONNECTOR_WS_URL"),
-    database: {
-      driver: driver as DatabaseDriver,
-      host: readRequired(env, "DB_HOST"),
-      port,
-      name: readRequired(env, "DB_NAME"),
-      user: readRequired(env, "DB_USER"),
-      password: readRequired(env, "DB_PASSWORD")
-    },
+    database,
     logLevel: logLevel as LogLevel,
     heartbeatIntervalMs,
     wsPingIntervalMs,
