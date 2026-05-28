@@ -1032,6 +1032,21 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
         query: async (sql, params) => client.query(sql, [...params]),
         end: () => client.end()
       };
+    },
+    mariadbConnectionFactory: async (config) => {
+      const mariadb = await importUnknownModule("mariadb");
+      const createConnection = (mariadb as any).createConnection ?? (mariadb as any).default?.createConnection;
+      const connection = await createConnection({
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        user: config.user,
+        password: config.password
+      });
+      return {
+        query: async (sql, params) => connection.query(sql, [...(params as unknown[])]),
+        end: () => connection.end()
+      };
     }
   };
 }

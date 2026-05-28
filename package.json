@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "dotenv": "^16.6.1",
+    "mariadb": "^3.5.2",
     "mysql2": "^3.22.3",
     "node-firebird": "^2.3.2",
     "pg": "^8.21.0",
