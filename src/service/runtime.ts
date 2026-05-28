@@ -22,6 +22,7 @@ import { StateStore } from "../state/state-store.js";
 import { STATE_FILE_NAME, type ConnectorState, type PendingSnapshotProduct } from "../state/state-types.js";
 import type {
   BatchAckMessage,
+  AdminRequestMessage,
   AdminResponseMessage,
   ConfigUpdatedMessage,
   ConnectorConfigMessage,
@@ -51,6 +52,13 @@ import {
   type SchemaDiscoveryTable
 } from "../transport/schema-discovery.js";
 import { WebSocketTransportClient } from "../transport/ws-client.js";
+import { handleAdminRequest, type AdminRouterDependencies } from "../discovery/admin-router.js";
+import { probeEngines } from "../discovery/engines.js";
+import { probeOdbcDsns } from "../discovery/odbc-dsns.js";
+import { probeNetwork, tcpProbe } from "../discovery/network.js";
+import { probeTestConnection } from "../discovery/test-connection.js";
+import { listWindowsServices } from "../discovery/service-list.js";
+import { nodeFileSystemReader } from "../discovery/fs-reader.js";
 import { CONNECTOR_VERSION } from "../version.js";
 
 export interface RuntimeTransport {
@@ -59,6 +67,7 @@ export interface RuntimeTransport {
   on(event: "config", listener: (message: ConnectorConfigMessage) => void): this;
   on(event: "batchAck", listener: (message: BatchAckMessage) => void): this;
   on(event: "reloadConfig", listener: (message: BatchAckMessage | ConfigUpdatedMessage) => void): this;
+  on(event: "adminRequest", listener: (request: AdminRequestMessage) => void): this;
   on(event: "schemaDiscoveryRequest", listener: (request: SchemaDiscoveryRequest) => void): this;
   on(
     event: "fileDiscoveryScanRequest",
@@ -332,6 +341,14 @@ export class ConnectorRuntime {
     this.transport.on("reloadConfig", () => {
       this.pausePolling("config reload requested");
     });
+    this.transport.on("adminRequest", (request) => {
+      if (request.command === "schema.listTables") {
+        return; // Handled by handleSchemaDiscovery via schemaDiscoveryRequest event
+      }
+      this.handleProbeAdminRequest(request).catch((error) =>
+        this.handleRuntimeError("ADMIN_REQUEST_FAILED", error)
+      );
+    });
     this.transport.on("schemaDiscoveryRequest", (request) => {
       this.handleSchemaDiscovery(request).catch((error) => this.handleRuntimeError("ADMIN_REQUEST_FAILED", error));
     });
@@ -533,6 +550,54 @@ export class ConnectorRuntime {
         tableCount: undefined
       });
     }
+  }
+
+  private async handleProbeAdminRequest(request: AdminRequestMessage): Promise<void> {
+    this.logger.info("admin.probe.received", {
+      requestId: request.requestId,
+      command: request.command
+    });
+    const deps = this.buildAdminRouterDeps();
+    const response = await handleAdminRequest(request, deps);
+    this.transport.sendAdminResponse(response);
+    this.logger.info("admin.probe.responded", {
+      requestId: request.requestId,
+      command: request.command,
+      ok: response.ok
+    });
+  }
+
+  private buildAdminRouterDeps(): AdminRouterDependencies {
+    const registry = createRegExeRegistryReader();
+    const probeEnginesDep = () =>
+      probeEngines(
+        {
+          registry,
+          fs: nodeFileSystemReader,
+          serviceList: listWindowsServices,
+          signal: new AbortController().signal
+        },
+        { tcpProbe: (host, port, timeoutMs = 3000) => tcpProbe(host, port, timeoutMs) }
+      );
+    return {
+      probeEngines: probeEnginesDep,
+      probeOdbcDsns: () => probeOdbcDsns(registry),
+      probeNetwork,
+      probeTestConnection: (input) =>
+        probeTestConnection(input, {
+          createAdapter: (config) =>
+            createSourceDatabaseAdapter({
+              config,
+              dependencies: this.adapterDependencies
+            }),
+          timeoutMs: 5000
+        }),
+      schemaListTables: async () => {
+        // This branch is reachable only if a probe.* misroutes here in the future.
+        // Today, schema.listTables is handled by handleSchemaDiscovery — this is a no-op fallback.
+        return [];
+      }
+    };
   }
 
   private async handleSetupConfig(request: ConnectorSetupConfigCommand): Promise<void> {
