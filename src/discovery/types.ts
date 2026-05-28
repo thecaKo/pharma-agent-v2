@@ -6,10 +6,27 @@ export interface WindowsService {
   state: "running" | "stopped" | "unknown";
 }
 
+export interface WindowsProcess {
+  pid: number;
+  name: string;
+  path?: string;
+}
+
+export interface WindowsConnection {
+  pid: number;
+  localAddr: string;
+  localPort: number;
+  remoteAddr: string;
+  remotePort: number;
+  state: string;
+}
+
 export interface ProbeContext {
   registry: RegistryReader;
   fs: FileSystemReader;
   serviceList: () => Promise<WindowsService[]>;
+  listProcesses: () => Promise<WindowsProcess[]>;
+  listConnections: () => Promise<WindowsConnection[]>;
   signal: AbortSignal;
 }
 

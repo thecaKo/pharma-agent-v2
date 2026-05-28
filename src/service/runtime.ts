@@ -595,6 +595,8 @@ export class ConnectorRuntime {
             registry,
             fs: nodeFileSystemReader,
             serviceList: listWindowsServices,
+            listProcesses: async () => [],
+            listConnections: async () => [],
             signal: new AbortController().signal
           },
           { tcpProbe: (host, port, timeoutMs = 3000) => tcpProbe(host, port, timeoutMs) }

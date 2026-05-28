@@ -7,12 +7,15 @@ function makeContext(overrides: Partial<ProbeContext> = {}): ProbeContext {
   const defaultFs: FileSystemReader = {
     readFile: vi.fn(async () => ""),
     listDir: vi.fn(async () => []),
-    stat: vi.fn(async () => undefined)
+    stat: vi.fn(async () => undefined),
+    enumerateTop: vi.fn(async () => [])
   };
   return {
     registry: { readKey: vi.fn(async () => ({})) } as never,
     fs: defaultFs,
     serviceList: vi.fn(async () => []),
+    listProcesses: vi.fn(async () => []),
+    listConnections: vi.fn(async () => []),
     signal: new AbortController().signal,
     ...overrides
   };
@@ -28,7 +31,8 @@ describe("probeEngines", () => {
         stat: vi.fn(async (path: string) => {
           if (path.toLowerCase().includes("msodbcsql")) return { isFile: true, isDirectory: false };
           return undefined;
-        })
+        }),
+        enumerateTop: vi.fn(async () => [])
       }
     });
 
@@ -64,7 +68,8 @@ describe("probeEngines", () => {
         listDir: vi.fn(async () => []),
         stat: vi.fn(async (path: string) =>
           path.toLowerCase().endsWith("gds32.dll") ? { isFile: true, isDirectory: false } : undefined
-        )
+        ),
+        enumerateTop: vi.fn(async () => [])
       }
     });
     const engines = await probeEngines(ctx, { tcpProbe: async () => false });
