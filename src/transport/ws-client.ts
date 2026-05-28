@@ -18,6 +18,7 @@ import {
   type BatchAckMessage,
   type AdminRequestMessage,
   type AdminResponseMessage,
+  type BootstrapDbConfigMessage,
   type ConfigUpdatedMessage,
   type ConnectorConfigMessage,
   type ConnectorDiscoveryMessage,
@@ -104,7 +105,8 @@ export type WebSocketTransportEvent =
   | "adminRequest"
   | "schemaDiscoveryRequest"
   | "fileDiscoveryScanRequest"
-  | "setupConfigRequest";
+  | "setupConfigRequest"
+  | "bootstrapDbConfig";
 
 function isTablesPayload(payload: unknown): payload is { tables: unknown[] } {
   return typeof payload === "object" && payload !== null && Array.isArray((payload as { tables?: unknown }).tables);
@@ -167,6 +169,7 @@ export class WebSocketTransportClient extends EventEmitter {
     listener: (request: { correlationId: string; rootPath?: string }) => void
   ): this;
   public override on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
+  public override on(event: "bootstrapDbConfig", listener: (message: BootstrapDbConfigMessage) => void): this;
   public override on(event: WebSocketTransportEvent, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -424,6 +427,13 @@ export class WebSocketTransportClient extends EventEmitter {
             command: message.command
           } satisfies SchemaDiscoveryRequest);
         }
+        return;
+      case "connector.bootstrap.dbConfig":
+        this.logger.info("bootstrap.db_config.received", {
+          requestId: message.requestId,
+          dbDriver: message.database.driver
+        });
+        this.emit("bootstrapDbConfig", message);
         return;
     }
   }

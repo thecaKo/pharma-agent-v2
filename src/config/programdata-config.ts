@@ -1,7 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import type { LogLevel } from "./types.js";
+import { join, dirname } from "node:path";
+import type { DatabaseConfig, LogLevel } from "./types.js";
 import { redactString } from "../logging/redact.js";
 
 export const CONNECTOR_CONFIG_FILE_NAME = "connector-config.json";
@@ -158,6 +158,31 @@ function redactInstallerConfigDiagnostic(message: string, raw: string): string {
 function collectInstallerConfigSecrets(raw: string): string[] {
   const tokenMatch = raw.match(/"CONNECTOR_TOKEN"\s*:\s*"([^"]+)"/u);
   return tokenMatch?.[1] ? [tokenMatch[1]] : [];
+}
+
+export async function writeDatabaseConfig(
+  programData: string | undefined,
+  database: DatabaseConfig
+): Promise<void> {
+  const filePath = defaultProgramDataConfigPath(programData);
+  await mkdir(dirname(filePath), { recursive: true });
+
+  let current: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(filePath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    current = isPlainRecord(parsed) ? parsed : {};
+  } catch (err) {
+    if (!isMissingFileError(err)) {
+      throw new ProgramDataConfigError(
+        "Could not read existing connector config file before writing database section."
+      );
+    }
+    current = {};
+  }
+
+  const next = { ...current, database };
+  await writeFile(filePath, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
 }
 
 function isMissingFileError(error: unknown): boolean {

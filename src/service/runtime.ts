@@ -24,12 +24,14 @@ import type {
   BatchAckMessage,
   AdminRequestMessage,
   AdminResponseMessage,
+  BootstrapDbConfigMessage,
   ConfigUpdatedMessage,
   ConnectorConfigMessage,
   ConnectorDiscoveryMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
 import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage, buildConnectorDiscoveryMessage } from "../transport/protocol.js";
+import { writeDatabaseConfig } from "../config/programdata-config.js";
 import {
   buildSetupConfigFailureResult,
   buildSetupConfigSuccessResult,
@@ -75,6 +77,7 @@ export interface RuntimeTransport {
     listener: (request: { correlationId: string; rootPath?: string }) => void
   ): this;
   on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
+  on(event: "bootstrapDbConfig", listener: (message: BootstrapDbConfigMessage) => void): this;
   connect(): Promise<void>;
   close(): Promise<void>;
   isConnected(): boolean;
@@ -368,6 +371,11 @@ export class ConnectorRuntime {
         this.handleRuntimeError("SETUP_CONFIG_FAILED", error)
       );
     });
+    this.transport.on("bootstrapDbConfig", (message) => {
+      this.applyBootstrapDbConfig(message).catch((error) =>
+        this.handleRuntimeError("BOOTSTRAP_DB_CONFIG_FAILED", error)
+      );
+    });
   }
 
   private async handleConfig(message: ConnectorConfigMessage): Promise<void> {
@@ -577,34 +585,70 @@ export class ConnectorRuntime {
 
   private buildAdminRouterDeps(): AdminRouterDependencies {
     const registry = createRegExeRegistryReader();
-    const probeEnginesDep = () =>
-      probeEngines(
-        {
-          registry,
-          fs: nodeFileSystemReader,
-          serviceList: listWindowsServices,
-          signal: new AbortController().signal
-        },
-        { tcpProbe: (host, port, timeoutMs = 3000) => tcpProbe(host, port, timeoutMs) }
-      );
+    const recordSuccess = (cmd: string) => this.bootstrapState.recordProbeSuccess(cmd);
+    const recordError = (cmd: string, code: string) => this.bootstrapState.recordProbeError(cmd, code);
+
+    const probeEnginesDep = async () => {
+      try {
+        const result = await probeEngines(
+          {
+            registry,
+            fs: nodeFileSystemReader,
+            serviceList: listWindowsServices,
+            signal: new AbortController().signal
+          },
+          { tcpProbe: (host, port, timeoutMs = 3000) => tcpProbe(host, port, timeoutMs) }
+        );
+        recordSuccess("probe.engines");
+        return result;
+      } catch (err) {
+        recordError("probe.engines", "internal");
+        throw err;
+      }
+    };
+
     return {
       probeEngines: probeEnginesDep,
-      probeOdbcDsns: () => probeOdbcDsns(registry),
-      probeNetwork,
-      probeTestConnection: (input) =>
-        probeTestConnection(input, {
-          createAdapter: (config) =>
-            createSourceDatabaseAdapter({
-              config,
-              dependencies: this.adapterDependencies
-            }),
-          timeoutMs: 5000
-        }),
-      schemaListTables: async () => {
-        // This branch is reachable only if a probe.* misroutes here in the future.
-        // Today, schema.listTables is handled by handleSchemaDiscovery — this is a no-op fallback.
-        return [];
-      }
+      probeOdbcDsns: async () => {
+        try {
+          const result = await probeOdbcDsns(registry);
+          recordSuccess("probe.odbc_dsns");
+          return result;
+        } catch (err) {
+          recordError("probe.odbc_dsns", "internal");
+          throw err;
+        }
+      },
+      probeNetwork: async (input) => {
+        try {
+          const result = await probeNetwork(input);
+          if (result.reachable) recordSuccess("probe.network");
+          else recordError("probe.network", result.error ?? "unknown");
+          return result;
+        } catch (err) {
+          recordError("probe.network", "internal");
+          throw err;
+        }
+      },
+      probeTestConnection: async (input) => {
+        try {
+          const result = await probeTestConnection(input, {
+            createAdapter: (config) =>
+              createSourceDatabaseAdapter({
+                config,
+                dependencies: this.adapterDependencies
+              }),
+            timeoutMs: 5000
+          });
+          if (result.ok) recordSuccess("probe.test_connection");
+          else recordError("probe.test_connection", result.code);
+          return result;
+        } catch (err) {
+          recordError("probe.test_connection", "internal");
+          throw err;
+        }
+      },
+      schemaListTables: async () => []
     };
   }
 
@@ -717,6 +761,44 @@ export class ConnectorRuntime {
       dbName: databaseConfig.name,
       dbUser: databaseConfig.user
     });
+  }
+
+  public async applyBootstrapDbConfig(message: BootstrapDbConfigMessage): Promise<void> {
+    if (this.config.database) {
+      this.logger.warn("bootstrap.db_config_ignored", {
+        reason: "already_synced",
+        requestId: message.requestId
+      });
+      return;
+    }
+
+    this.logger.info("bootstrap.db_config_received", {
+      requestId: message.requestId,
+      dbDriver: message.database.driver
+    });
+
+    try {
+      await writeDatabaseConfig(this.configuredProgramDataPath(), message.database);
+    } catch (err) {
+      this.logger.error("bootstrap.persist_failed", {
+        message: err instanceof Error ? err.message : String(err)
+      });
+      return;
+    }
+
+    this.config = { ...this.config, database: message.database } as ConnectorConfig;
+    this.adapter = createSourceDatabaseAdapter({
+      config: message.database,
+      dependencies: this.adapterDependencies,
+      secrets: runtimeConfigSecrets(this.config)
+    });
+
+    this.logger.info("bootstrap.transitioned_to_synced", {
+      dbDriver: message.database.driver
+    });
+
+    this.sendHeartbeat();
+    await this.resumeSavedMappingIfAvailable();
   }
 
   private async handleFileDiscoveryScan(request: { correlationId: string; rootPath?: string }): Promise<void> {

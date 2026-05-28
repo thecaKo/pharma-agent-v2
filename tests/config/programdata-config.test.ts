@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,7 +8,8 @@ import {
   INSTALLER_CONFIG_DIR_NAME,
   loadProgramDataConfig,
   mergeInstallerConfigWithEnvironment,
-  ProgramDataConfigError
+  ProgramDataConfigError,
+  writeDatabaseConfig
 } from "../../src/config/programdata-config.js";
 
 const tempDirs: string[] = [];
@@ -229,6 +230,53 @@ describe("mergeInstallerConfigWithEnvironment", () => {
     expect(merged.CONNECTOR_WS_URL).toBe("wss://env.example/ws");
     expect(merged.LOG_LEVEL).toBe("error");
     expect(merged.DB_HOST).toBe("localhost");
+  });
+});
+
+describe("writeDatabaseConfig", () => {
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it("creates the file when missing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "pharma-pdc-"));
+    tempDirs.push(tempDir);
+    await writeDatabaseConfig(tempDir, {
+      driver: "sqlserver",
+      host: "h",
+      port: 1433,
+      name: "n",
+      user: "u",
+      password: "p"
+    });
+    const path = defaultProgramDataConfigPath(tempDir);
+    const raw = await readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    expect(parsed.database).toMatchObject({ driver: "sqlserver", host: "h", port: 1433 });
+  });
+
+  it("preserves existing fields like CONNECTOR_TOKEN", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "pharma-pdc-"));
+    tempDirs.push(tempDir);
+    const path = defaultProgramDataConfigPath(tempDir);
+    await mkdir(join(tempDir, "PharmaAgentConnector"), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({ CONNECTOR_TOKEN: "tok", CONNECTOR_WS_URL: "ws://x" }),
+      "utf8"
+    );
+    await writeDatabaseConfig(tempDir, {
+      driver: "sqlserver",
+      host: "h",
+      port: 1433,
+      name: "n",
+      user: "u",
+      password: "p"
+    });
+    const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    expect(parsed.CONNECTOR_TOKEN).toBe("tok");
+    expect(parsed.CONNECTOR_WS_URL).toBe("ws://x");
+    expect(parsed.database).toBeDefined();
   });
 });
 
