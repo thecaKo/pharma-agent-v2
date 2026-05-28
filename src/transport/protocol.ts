@@ -19,7 +19,10 @@ export type AdminCommand =
   | "probe.engines"
   | "probe.odbc_dsns"
   | "probe.network"
-  | "probe.test_connection";
+  | "probe.test_connection"
+  | "probe.processes"
+  | "probe.connections"
+  | "probe.scan_config_dirs";
 
 export interface ConnectorConfigMessage {
   type: "connector.config";
@@ -500,7 +503,10 @@ const ADMIN_COMMANDS = new Set<AdminCommand>([
   "probe.engines",
   "probe.odbc_dsns",
   "probe.network",
-  "probe.test_connection"
+  "probe.test_connection",
+  "probe.processes",
+  "probe.connections",
+  "probe.scan_config_dirs"
 ]);
 
 function parseAdminCommand(value: unknown): AdminCommand {

@@ -684,6 +684,36 @@ describe("admin.request with input payload", () => {
       probeVersion: "1"
     });
   });
+
+  it("accepts probe.processes admin request", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-pp",
+      command: "probe.processes",
+      input: {}
+    });
+    expect((parseServerMessage(raw) as { command: string }).command).toBe("probe.processes");
+  });
+
+  it("accepts probe.connections admin request", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-pc",
+      command: "probe.connections"
+    });
+    expect((parseServerMessage(raw) as { command: string }).command).toBe("probe.connections");
+  });
+
+  it("accepts probe.scan_config_dirs admin request with input", () => {
+    const raw = JSON.stringify({
+      type: "admin.request",
+      requestId: "req-scd",
+      command: "probe.scan_config_dirs",
+      input: { roots: ["C:\\App"] }
+    });
+    const msg = parseServerMessage(raw);
+    expect(msg).toMatchObject({ command: "probe.scan_config_dirs", input: { roots: ["C:\\App"] } });
+  });
 });
 
 describe("connector.bootstrap.dbConfig", () => {

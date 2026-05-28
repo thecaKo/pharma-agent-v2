@@ -8,6 +8,9 @@ function makeDeps(overrides: Partial<AdminRouterDependencies> = {}): AdminRouter
     probeOdbcDsns: vi.fn(async () => []),
     probeNetwork: vi.fn(async () => ({ reachable: true, latencyMs: 5 })),
     probeTestConnection: vi.fn(async () => ({ ok: true, latencyMs: 12 })),
+    probeProcesses: vi.fn(async () => [{ pid: 4128, name: "Big.exe", path: "C:\\Linx\\bin\\Big.exe" }]),
+    probeConnections: vi.fn(async () => []),
+    probeScanConfigDirs: vi.fn(async () => ({ files: [], truncated: false, rootsRejected: [], errors: [] })),
     schemaListTables: vi.fn(async () => ["products"]),
     ...overrides
   };
@@ -104,5 +107,50 @@ describe("handleAdminRequest", () => {
     };
     const res = await handleAdminRequest(req, makeDeps());
     expect(res).toMatchObject({ ok: true, payload: { tables: ["products"] } });
+  });
+
+  it("dispatches probe.processes", async () => {
+    const res = await handleAdminRequest(
+      { type: "admin.request", requestId: "r", command: "probe.processes" },
+      makeDeps()
+    );
+    expect(res).toMatchObject({ ok: true, payload: { processes: expect.any(Array) } });
+  });
+
+  it("dispatches probe.connections", async () => {
+    const res = await handleAdminRequest(
+      { type: "admin.request", requestId: "r", command: "probe.connections" },
+      makeDeps()
+    );
+    expect(res).toMatchObject({ ok: true, payload: { connections: expect.any(Array) } });
+  });
+
+  it("dispatches probe.scan_config_dirs with roots", async () => {
+    const res = await handleAdminRequest(
+      {
+        type: "admin.request",
+        requestId: "r",
+        command: "probe.scan_config_dirs",
+        input: { roots: ["C:\\App"] }
+      },
+      makeDeps()
+    );
+    expect(res).toMatchObject({
+      ok: true,
+      payload: { files: expect.any(Array), truncated: false, rootsRejected: [], errors: [] }
+    });
+  });
+
+  it("rejects probe.scan_config_dirs with empty roots", async () => {
+    const res = await handleAdminRequest(
+      {
+        type: "admin.request",
+        requestId: "r",
+        command: "probe.scan_config_dirs",
+        input: { roots: [] }
+      },
+      makeDeps()
+    );
+    expect(res).toMatchObject({ ok: false, error: { errorCode: "INVALID_INPUT" } });
   });
 });

@@ -8,6 +8,10 @@ import type { EngineCandidate } from "./engines.js";
 import type { OdbcDsnCandidate } from "./odbc-dsns.js";
 import type { ProbeNetworkInput, ProbeNetworkResult } from "./network.js";
 import type { TestConnectionInput, TestConnectionResult } from "./test-connection.js";
+import type { ProcessCandidate } from "./processes.js";
+import type { ConnectionCandidate } from "./connections.js";
+import type { ScanConfigDirsInput, ScanConfigDirsResult } from "./scan-config-dirs.js";
+import { MAX_ROOTS } from "./scan-config-dirs.js";
 
 const PROBE_VERSION = "1";
 
@@ -16,6 +20,9 @@ export interface AdminRouterDependencies {
   probeOdbcDsns: () => Promise<OdbcDsnCandidate[]>;
   probeNetwork: (input: ProbeNetworkInput) => Promise<ProbeNetworkResult>;
   probeTestConnection: (input: TestConnectionInput) => Promise<TestConnectionResult>;
+  probeProcesses: () => Promise<ProcessCandidate[]>;
+  probeConnections: () => Promise<ConnectionCandidate[]>;
+  probeScanConfigDirs: (input: ScanConfigDirsInput) => Promise<ScanConfigDirsResult>;
   schemaListTables: () => Promise<string[]>;
 }
 
@@ -43,6 +50,20 @@ export async function handleAdminRequest(
         const input = validateTestConnectionInput(req.input);
         if (!input.ok) return invalidInput(req, input.error);
         const result = await deps.probeTestConnection(input.value);
+        return success(req, result);
+      }
+      case "probe.processes": {
+        const processes = await deps.probeProcesses();
+        return success(req, { processes });
+      }
+      case "probe.connections": {
+        const connections = await deps.probeConnections();
+        return success(req, { connections });
+      }
+      case "probe.scan_config_dirs": {
+        const input = validateScanConfigDirsInput(req.input);
+        if (!input.ok) return invalidInput(req, input.error);
+        const result = await deps.probeScanConfigDirs(input.value);
         return success(req, result);
       }
       case "schema.listTables": {
@@ -120,4 +141,42 @@ function validateTestConnectionInput(input: unknown): Validated<TestConnectionIn
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateScanConfigDirsInput(input: unknown): Validated<ScanConfigDirsInput> {
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
+  if (!Array.isArray(input.roots) || input.roots.length === 0) {
+    return { ok: false, error: "input.roots must be a non-empty array" };
+  }
+  if (input.roots.length > MAX_ROOTS) {
+    return { ok: false, error: `input.roots accepts at most ${MAX_ROOTS} items` };
+  }
+  const roots: string[] = [];
+  for (const r of input.roots) {
+    if (typeof r !== "string" || r.length === 0) {
+      return { ok: false, error: "input.roots must contain non-empty strings" };
+    }
+    roots.push(r);
+  }
+  const out: ScanConfigDirsInput = { roots };
+  if (Array.isArray(input.patterns)) {
+    const patterns: string[] = [];
+    for (const p of input.patterns) {
+      if (typeof p !== "string" || p.length === 0) {
+        return { ok: false, error: "input.patterns must contain non-empty strings" };
+      }
+      patterns.push(p);
+    }
+    if (patterns.length > 0) out.patterns = patterns;
+  }
+  if (typeof input.maxDepth === "number" && Number.isInteger(input.maxDepth) && input.maxDepth > 0) {
+    out.maxDepth = input.maxDepth;
+  }
+  if (typeof input.maxFiles === "number" && Number.isInteger(input.maxFiles) && input.maxFiles > 0) {
+    out.maxFiles = input.maxFiles;
+  }
+  if (typeof input.maxAgeDays === "number" && input.maxAgeDays > 0) {
+    out.maxAgeDays = input.maxAgeDays;
+  }
+  return { ok: true, value: out };
 }
