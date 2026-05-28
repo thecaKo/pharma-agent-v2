@@ -3,6 +3,7 @@ import { FirebirdSourceAdapter, type FirebirdConnectionFactory } from "./firebir
 import { MySqlSourceAdapter, type MySqlConnectionFactory } from "./mysql-adapter.js";
 import { PostgresSourceAdapter, type PostgresConnectionFactory } from "./postgresql-adapter.js";
 import { MariaDbSourceAdapter, type MariaDbConnectionFactory } from "./mariadb-adapter.js";
+import { SqlServerSourceAdapter, type SqlServerConnectionFactory } from "./sqlserver-adapter.js";
 import type { SourceDatabaseAdapter } from "./source-adapter.js";
 
 export interface AdapterFactoryDependencies {
@@ -10,6 +11,7 @@ export interface AdapterFactoryDependencies {
   firebirdConnectionFactory: FirebirdConnectionFactory;
   postgresConnectionFactory: PostgresConnectionFactory;
   mariadbConnectionFactory: MariaDbConnectionFactory;
+  sqlserverConnectionFactory: SqlServerConnectionFactory;
 }
 
 export interface CreateSourceAdapterInput {
@@ -52,6 +54,12 @@ export function createSourceDatabaseAdapter(input: CreateSourceAdapterInput): So
       return new MariaDbSourceAdapter({
         config: input.config,
         connectionFactory: input.dependencies.mariadbConnectionFactory,
+        secrets: input.secrets
+      });
+    case "sqlserver":
+      return new SqlServerSourceAdapter({
+        config: input.config,
+        connectionFactory: input.dependencies.sqlserverConnectionFactory,
         secrets: input.secrets
       });
     default:
