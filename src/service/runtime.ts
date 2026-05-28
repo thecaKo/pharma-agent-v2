@@ -62,6 +62,12 @@ import { probeNetwork, tcpProbe } from "../discovery/network.js";
 import { probeTestConnection } from "../discovery/test-connection.js";
 import { listWindowsServices } from "../discovery/service-list.js";
 import { nodeFileSystemReader } from "../discovery/fs-reader.js";
+import { probeProcesses } from "../discovery/processes.js";
+import { probeConnections } from "../discovery/connections.js";
+import { probeScanConfigDirs } from "../discovery/scan-config-dirs.js";
+import { listWindowsProcesses } from "../discovery/process-list.js";
+import { listWindowsConnections } from "../discovery/connection-list.js";
+import type { ProbeContext } from "../discovery/types.js";
 import { CONNECTOR_VERSION } from "../version.js";
 
 export interface RuntimeTransport {
@@ -585,32 +591,30 @@ export class ConnectorRuntime {
 
   private buildAdminRouterDeps(): AdminRouterDependencies {
     const registry = createRegExeRegistryReader();
+    const buildProbeContext = (): ProbeContext => ({
+      registry,
+      fs: nodeFileSystemReader,
+      serviceList: listWindowsServices,
+      listProcesses: listWindowsProcesses,
+      listConnections: listWindowsConnections,
+      signal: new AbortController().signal
+    });
     const recordSuccess = (cmd: string) => this.bootstrapState.recordProbeSuccess(cmd);
     const recordError = (cmd: string, code: string) => this.bootstrapState.recordProbeError(cmd, code);
 
-    const probeEnginesDep = async () => {
-      try {
-        const result = await probeEngines(
-          {
-            registry,
-            fs: nodeFileSystemReader,
-            serviceList: listWindowsServices,
-            listProcesses: async () => [],
-            listConnections: async () => [],
-            signal: new AbortController().signal
-          },
-          { tcpProbe: (host, port, timeoutMs = 3000) => tcpProbe(host, port, timeoutMs) }
-        );
-        recordSuccess("probe.engines");
-        return result;
-      } catch (err) {
-        recordError("probe.engines", "internal");
-        throw err;
-      }
-    };
-
     return {
-      probeEngines: probeEnginesDep,
+      probeEngines: async () => {
+        try {
+          const result = await probeEngines(buildProbeContext(), {
+            tcpProbe: (host, port, timeoutMs = 3000) => tcpProbe(host, port, timeoutMs)
+          });
+          recordSuccess("probe.engines");
+          return result;
+        } catch (err) {
+          recordError("probe.engines", "internal");
+          throw err;
+        }
+      },
       probeOdbcDsns: async () => {
         try {
           const result = await probeOdbcDsns(registry);
@@ -647,6 +651,36 @@ export class ConnectorRuntime {
           return result;
         } catch (err) {
           recordError("probe.test_connection", "internal");
+          throw err;
+        }
+      },
+      probeProcesses: async () => {
+        try {
+          const result = await probeProcesses(buildProbeContext());
+          recordSuccess("probe.processes");
+          return result;
+        } catch (err) {
+          recordError("probe.processes", "internal");
+          throw err;
+        }
+      },
+      probeConnections: async () => {
+        try {
+          const result = await probeConnections(buildProbeContext());
+          recordSuccess("probe.connections");
+          return result;
+        } catch (err) {
+          recordError("probe.connections", "internal");
+          throw err;
+        }
+      },
+      probeScanConfigDirs: async (input) => {
+        try {
+          const result = await probeScanConfigDirs({ fs: nodeFileSystemReader }, input);
+          recordSuccess("probe.scan_config_dirs");
+          return result;
+        } catch (err) {
+          recordError("probe.scan_config_dirs", "internal");
           throw err;
         }
       },
