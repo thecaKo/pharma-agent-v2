@@ -1,4 +1,4 @@
-export type DatabaseDriver = "mysql" | "firebird" | "postgresql" | "mariadb";
+export type DatabaseDriver = "mysql" | "firebird" | "postgresql" | "mariadb" | "sqlserver";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -9,6 +9,8 @@ export interface DatabaseConfig {
   name: string;
   user: string;
   password: string;
+  instance?: string;
+  trustServerCertificate?: boolean;
 }
 
 export interface ConnectorConfig {
