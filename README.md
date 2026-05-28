@@ -2,6 +2,23 @@
 
 Local TypeScript runtime foundation for the Pharma Agent connector Windows Service.
 
+## Onboarding Flows
+
+The service supports two onboarding paths:
+
+- **CLI local (legacy):** Run `npm run database-setup --` on the client machine to
+  fill `~/.pharma-agent/database-setup.json` before starting the service. Service
+  starts directly in `synced` state.
+- **Painel-driven (recommended):** Skip `database-setup`. Service boots in
+  `bootstrap` state, connects to the panel via WS, and accepts `probe.*` admin
+  requests for the panel to discover engines, ODBC DSNs, network reachability and
+  test candidate connections. The panel then sends a `connector.bootstrap.dbConfig`
+  envelope; the service persists the config to `%PROGRAMDATA%\PharmaAgentConnector\connector-config.json`
+  and transitions to `synced` without restarting.
+
+In both flows the service emits a `connector.discovery` snapshot on first connect
+with `mode: "bootstrap"` or `mode: "synced"`.
+
 ## Local Development
 
 Install dependencies:
