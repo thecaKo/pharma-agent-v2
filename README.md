@@ -19,6 +19,14 @@ The service supports two onboarding paths:
 In both flows the service emits a `connector.discovery` snapshot on first connect
 with `mode: "bootstrap"` or `mode: "synced"`.
 
+## Discovery Probes (Fase 4b)
+
+Além das probes da Fase 2 (engines, odbc_dsns, network, test_connection), o agente expõe:
+
+- **`probe.processes`** — lista processos rodando com `pid`, `name`, `path` da exe (via WMIC + PowerShell fallback). Cross-platform: retorna lista vazia.
+- **`probe.connections`** — lista conexões TCP em portas de banco conhecidas (`1433`, `5432`, `3306`, `3050`, `1521`, `1583`, `50000`, `27017`), cruzando PID com nome do processo.
+- **`probe.scan_config_dirs`** — varre diretórios prioritários por arquivos de config (`.ini`, `.json`, `.xml`, `.env`, `.db`, etc.), retornando metadata (path/size/mtime). Aplica deny-list intransponível (`C:\`, `C:\Windows`, `node_modules`, etc.) e limites de profundidade/quantidade. Aceita expansão de `%VAR%`.
+
 ## Local Development
 
 Install dependencies:
