@@ -3,6 +3,7 @@ import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { validateReadOnlySelect, ReadOnlySqlError } from "./readonly-sql.js";
+import type { ProvisionReadonlyUserInput, ProvisionReadonlyUserResult } from "./provision-types.js";
 import type {
   DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput,
   QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter
@@ -223,6 +224,24 @@ export class MySqlSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
+  public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
+    const connection = this.requireConnection("provision");
+    const user = quoteMysqlIdentifier(input.username);
+    const db = quoteMysqlIdentifier(this.config.name);
+    try {
+      await connection.query(`CREATE USER IF NOT EXISTS ${user}@'%' IDENTIFIED BY ?`, [input.password]);
+      await connection.query(`ALTER USER ${user}@'%' IDENTIFIED BY ?`, [input.password]);
+      await connection.query(`GRANT SELECT ON ${db}.* TO ${user}@'%'`, []);
+      await connection.query(`FLUSH PRIVILEGES`, []);
+      return { outcome: "provisioned", grantedScope: "all_tables" };
+    } catch (error) {
+      if (isMysqlPrivilegeError(error)) {
+        return { outcome: "fallback_no_privilege", grantedScope: "all_tables" };
+      }
+      throw normalizeDatabaseError({ driver: "mysql", operation: "provision", error, secrets: this.secrets });
+    }
+  }
+
   private requireConnection(operation: DatabaseOperation = "query"): MySqlDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -323,6 +342,13 @@ function quoteMysqlIdentifier(name: string): string {
     throw new ReadOnlySqlError(`nome de tabela inválido: ${name}`);
   }
   return `\`${name}\``;
+}
+
+function isMysqlPrivilegeError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { errno?: unknown; code?: unknown }).errno ?? (error as { code?: unknown }).code;
+  const numeric = typeof code === "number" ? code : Number(code);
+  return numeric === 1044 || numeric === 1142;
 }
 
 function isRecord(value: unknown): value is SourceRow {
