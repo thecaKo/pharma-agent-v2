@@ -17,6 +17,10 @@ import {
   SCHEMA_TABLES_LIST_COMMAND_TYPE,
   type SchemaDiscoveryRequest
 } from "./schema-discovery.js";
+import {
+  AI_SESSION_START_TYPE, TOOL_INVOKE_TYPE, MAPPING_DECISION_TYPE, AI_SESSION_ABORT_TYPE,
+  type AiSessionStartCommand, type ToolInvokeCommand, type MappingDecisionCommand, type AiSessionAbortCommand
+} from "../ai-session/ai-protocol.js";
 
 export type ServerMessageClassification = "malformed" | "core" | "extension" | "unsupported";
 
@@ -32,7 +36,11 @@ export const DOCUMENTED_EXTENSION_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "schema.tables.list",
   "catalog.mapping.preview",
   FILE_DISCOVERY_SCAN_COMMAND_TYPE,
-  CONNECTOR_SETUP_CONFIG_COMMAND_TYPE
+  CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
+  AI_SESSION_START_TYPE,
+  TOOL_INVOKE_TYPE,
+  MAPPING_DECISION_TYPE,
+  AI_SESSION_ABORT_TYPE
 ]);
 
 export interface ServerMessageEnvelope {
@@ -133,7 +141,11 @@ export type ExtensionRouteDispatchResult =
   | { kind: "schemaDiscoveryRequest"; request: Extract<SchemaDiscoveryRequest, { responseFormat: "legacy" }> }
   | { kind: "catalogMappingPreviewStub"; correlationId: string }
   | { kind: "fileDiscoveryScanRequest"; correlationId: string; rootPath?: string }
-  | { kind: "setupConfigRequest"; request: import("./connector-setup-ws.js").ConnectorSetupConfigCommand };
+  | { kind: "setupConfigRequest"; request: import("./connector-setup-ws.js").ConnectorSetupConfigCommand }
+  | { kind: "aiSessionStart"; command: AiSessionStartCommand }
+  | { kind: "aiToolInvoke"; command: ToolInvokeCommand }
+  | { kind: "aiMappingDecision"; command: MappingDecisionCommand }
+  | { kind: "aiSessionAbort"; command: AiSessionAbortCommand };
 
 export type ExtensionRouteHandler = (
   envelope: ServerMessageEnvelope,
