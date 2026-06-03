@@ -51,6 +51,14 @@ import {
   parseServerMessageEnvelope,
   type ServerMessageEnvelope
 } from "./server-message-router.js";
+import "./ai-session-routes.js";
+import type {
+  AiSessionStartCommand,
+  ToolInvokeCommand,
+  MappingDecisionCommand,
+  AiSessionAbortCommand
+} from "../ai-session/ai-protocol.js";
+import type { AiSessionOutboundMessage } from "../ai-session/ai-session.js";
 import { calculateReconnectDelay, type RetryPolicyOptions } from "./retry-policy.js";
 
 export interface WebSocketTransportClientOptions {
@@ -106,7 +114,11 @@ export type WebSocketTransportEvent =
   | "schemaDiscoveryRequest"
   | "fileDiscoveryScanRequest"
   | "setupConfigRequest"
-  | "bootstrapDbConfig";
+  | "bootstrapDbConfig"
+  | "aiSessionStart"
+  | "aiToolInvoke"
+  | "aiMappingDecision"
+  | "aiSessionAbort";
 
 function isTablesPayload(payload: unknown): payload is { tables: unknown[] } {
   return typeof payload === "object" && payload !== null && Array.isArray((payload as { tables?: unknown }).tables);
@@ -170,6 +182,10 @@ export class WebSocketTransportClient extends EventEmitter {
   ): this;
   public override on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
   public override on(event: "bootstrapDbConfig", listener: (message: BootstrapDbConfigMessage) => void): this;
+  public override on(event: "aiSessionStart", listener: (command: AiSessionStartCommand) => void): this;
+  public override on(event: "aiToolInvoke", listener: (command: ToolInvokeCommand) => void): this;
+  public override on(event: "aiMappingDecision", listener: (command: MappingDecisionCommand) => void): this;
+  public override on(event: "aiSessionAbort", listener: (command: AiSessionAbortCommand) => void): this;
   public override on(event: WebSocketTransportEvent, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -296,6 +312,10 @@ export class WebSocketTransportClient extends EventEmitter {
 
   public sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void {
     this.send(message);
+  }
+
+  public sendAiSessionMessage(message: AiSessionOutboundMessage): void {
+    this.sendRaw(JSON.stringify(message));
   }
 
   private async openSocket(): Promise<void> {
@@ -487,6 +507,18 @@ export class WebSocketTransportClient extends EventEmitter {
           driver: result.request.driver
         });
         this.emit("setupConfigRequest", result.request);
+        return;
+      case "aiSessionStart":
+        this.emit("aiSessionStart", result.command);
+        return;
+      case "aiToolInvoke":
+        this.emit("aiToolInvoke", result.command);
+        return;
+      case "aiMappingDecision":
+        this.emit("aiMappingDecision", result.command);
+        return;
+      case "aiSessionAbort":
+        this.emit("aiSessionAbort", result.command);
         return;
       case "malformed":
         if (envelope.type === CONNECTOR_SETUP_CONFIG_COMMAND_TYPE && envelope.id) {

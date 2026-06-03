@@ -56,6 +56,15 @@ import {
 import { WebSocketTransportClient } from "../transport/ws-client.js";
 import { BootstrapState } from "./bootstrap-state.js";
 import { handleAdminRequest, type AdminRouterDependencies } from "../discovery/admin-router.js";
+import { AiSessionManager } from "./ai-session-manager.js";
+import { buildAiSessionDeps, buildRuntimeAdminDeps } from "./ai-session-wiring.js";
+import type {
+  AiSessionStartCommand,
+  ToolInvokeCommand,
+  MappingDecisionCommand,
+  AiSessionAbortCommand
+} from "../ai-session/ai-protocol.js";
+import type { AiSessionOutboundMessage } from "../ai-session/ai-session.js";
 import { probeEngines } from "../discovery/engines.js";
 import { probeOdbcDsns } from "../discovery/odbc-dsns.js";
 import { probeNetwork, tcpProbe } from "../discovery/network.js";
@@ -69,6 +78,18 @@ import { listWindowsProcesses } from "../discovery/process-list.js";
 import { listWindowsConnections } from "../discovery/connection-list.js";
 import type { ProbeContext } from "../discovery/types.js";
 import { CONNECTOR_VERSION } from "../version.js";
+
+type ProbeRouterDependencies = Pick<
+  AdminRouterDependencies,
+  | "probeEngines"
+  | "probeOdbcDsns"
+  | "probeNetwork"
+  | "probeTestConnection"
+  | "probeProcesses"
+  | "probeConnections"
+  | "probeScanConfigDirs"
+  | "schemaListTables"
+>;
 
 export interface RuntimeTransport {
   on(event: "connected", listener: () => void): this;
@@ -84,6 +105,10 @@ export interface RuntimeTransport {
   ): this;
   on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
   on(event: "bootstrapDbConfig", listener: (message: BootstrapDbConfigMessage) => void): this;
+  on(event: "aiSessionStart", listener: (command: AiSessionStartCommand) => void): this;
+  on(event: "aiToolInvoke", listener: (command: ToolInvokeCommand) => void): this;
+  on(event: "aiMappingDecision", listener: (command: MappingDecisionCommand) => void): this;
+  on(event: "aiSessionAbort", listener: (command: AiSessionAbortCommand) => void): this;
   connect(): Promise<void>;
   close(): Promise<void>;
   isConnected(): boolean;
@@ -107,6 +132,7 @@ export interface RuntimeTransport {
   sendFileDiscoveryScanResult(message: FileDiscoveryScanResultMessage): void;
   sendConnectorSetupConfigResult(message: ConnectorSetupConfigResultMessage): void;
   sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void;
+  sendAiSessionMessage(message: AiSessionOutboundMessage): void;
   getReconnectAttemptCount(): number;
 }
 
@@ -175,6 +201,7 @@ export class ConnectorRuntime {
   private activeMapping?: ValidatedMappingConfig;
   private activeConnectorId?: string;
   private activeCustomerId?: string;
+  private aiSessionManager?: AiSessionManager;
   private inFlightBatch?: ProductChangeBatch;
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
@@ -382,6 +409,38 @@ export class ConnectorRuntime {
         this.handleRuntimeError("BOOTSTRAP_DB_CONFIG_FAILED", error)
       );
     });
+
+    const manager = new AiSessionManager({
+      emit: (message) => this.transport.sendAiSessionMessage(message),
+      buildDeps: () =>
+        buildAiSessionDeps({
+          handleAdminRequest: (req) => handleAdminRequest(req, this.buildFullAdminRouterDeps()),
+          secrets: () => runtimeConfigSecrets(this.config),
+          now: this.now,
+          writeDatabaseConfig,
+          programData: this.configuredProgramDataPath(),
+          currentDatabase: () => this.config.database,
+          activateMapping: (mapping) =>
+            this.activateMapping({
+              connectorId: this.activeConnectorId ?? "ai-session",
+              customerId: this.activeCustomerId ?? "ai-session",
+              mapping
+            })
+        })
+    });
+    this.aiSessionManager = manager;
+    this.transport.on("aiSessionStart", (command) => {
+      void manager.onStart(command);
+    });
+    this.transport.on("aiToolInvoke", (command) => {
+      void manager.onToolInvoke(command);
+    });
+    this.transport.on("aiMappingDecision", (command) => {
+      void manager.onDecision(command);
+    });
+    this.transport.on("aiSessionAbort", (command) => {
+      manager.onAbort(command);
+    });
   }
 
   private async handleConfig(message: ConnectorConfigMessage): Promise<void> {
@@ -579,7 +638,7 @@ export class ConnectorRuntime {
       requestId: request.requestId,
       command: request.command
     });
-    const deps = this.buildAdminRouterDeps();
+    const deps = this.buildFullAdminRouterDeps();
     const response = await handleAdminRequest(request, deps);
     this.transport.sendAdminResponse(response);
     this.logger.info("admin.probe.responded", {
@@ -589,7 +648,7 @@ export class ConnectorRuntime {
     });
   }
 
-  private buildAdminRouterDeps(): AdminRouterDependencies {
+  private buildAdminRouterDeps(): ProbeRouterDependencies {
     const registry = createRegExeRegistryReader();
     const buildProbeContext = (): ProbeContext => ({
       registry,
@@ -686,6 +745,15 @@ export class ConnectorRuntime {
       },
       schemaListTables: async () => []
     };
+  }
+
+  private buildFullAdminRouterDeps(): AdminRouterDependencies {
+    return buildRuntimeAdminDeps({
+      getAdapter: () => this.ensureAdapterConnected(),
+      fs: nodeFileSystemReader,
+      registry: createRegExeRegistryReader(),
+      probeDeps: this.buildAdminRouterDeps()
+    });
   }
 
   private async handleSetupConfig(request: ConnectorSetupConfigCommand): Promise<void> {
