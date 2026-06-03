@@ -3,6 +3,7 @@ import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { validateReadOnlySelect, ReadOnlySqlError } from "./readonly-sql.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult } from "./provision-types.js";
 import type {
   DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput,
   QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter
@@ -260,6 +261,29 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
+  public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
+    const connection = this.requireConnection("provision");
+    const user = quoteFirebirdIdentifier(input.username);
+    try {
+      await connection.query(`CREATE OR ALTER USER ${user} PASSWORD ?`, [input.password]);
+      const rows = await connection.query(
+        `SELECT RDB$RELATION_NAME FROM RDB$RELATIONS
+         WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL`,
+        []
+      );
+      const tables = extractFirebirdRelationNames(rows);
+      for (const table of tables) {
+        await connection.query(`GRANT SELECT ON ${quoteFirebirdIdentifier(table)} TO ${user}`, []);
+      }
+      return { outcome: "provisioned", grantedScope: "all_tables" };
+    } catch (error) {
+      if (isFirebirdPrivilegeError(error)) {
+        return { outcome: "fallback_no_privilege", grantedScope: "all_tables" };
+      }
+      throw normalizeDatabaseError({ driver: "firebird", operation: "provision", error, secrets: this.secrets });
+    }
+  }
+
   private requireConnection(operation: DatabaseOperation = "query"): FirebirdDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -356,6 +380,24 @@ function quoteFirebirdIdentifier(name: string): string {
     throw new ReadOnlySqlError(`nome de tabela inválido: ${name}`);
   }
   return `"${name}"`;
+}
+
+function extractFirebirdRelationNames(rows: unknown): string[] {
+  if (!Array.isArray(rows)) return [];
+  const names: string[] = [];
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null) continue;
+    const raw = (row as Record<string, unknown>)["RDB$RELATION_NAME"];
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      names.push(raw.trim());
+    }
+  }
+  return names;
+}
+
+function isFirebirdPrivilegeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no permission/i.test(message);
 }
 
 function isRecord(value: unknown): value is SourceRow {
