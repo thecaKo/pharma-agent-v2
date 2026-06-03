@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { MySqlSourceAdapter, type MySqlDriverConnection } from "../../src/db/mysql-adapter.js";
+import { FirebirdSourceAdapter, type FirebirdDriverConnection } from "../../src/db/firebird-adapter.js";
 import type { DatabaseConfig } from "../../src/config/types.js";
+
+const fbConfig: DatabaseConfig = {
+  driver: "firebird", host: "127.0.0.1", port: 3050,
+  name: "/db/PHARMA.FDB", user: "SYSDBA", password: "masterkey"
+};
 
 const config: DatabaseConfig = {
   driver: "mysql", host: "127.0.0.1", port: 3306,
@@ -66,5 +72,39 @@ describe("MySqlSourceAdapter — FK / sample / readonly select", () => {
     const rows = await adapter.runReadOnlySelect({ sql: "SELECT codigo FROM produtos", limit: 25 });
     expect(rows).toEqual([{ codigo: "P1" }]);
     expect(query.mock.calls[0]?.[0]).toMatch(/limit 25/i);
+  });
+});
+
+describe("FirebirdSourceAdapter — inspeção", () => {
+  it("listForeignKeys lê rdb$ relation constraints", async () => {
+    const query = vi.fn(async () => [
+      { fromTable: "DESCONTO_PRODUTOS", fromColumn: "PRODUTO_ID", toTable: "PRODUTOS", toColumn: "ID", constraintName: "FK_DP" }
+    ]);
+    const connection: FirebirdDriverConnection = { query, detach: vi.fn(async () => undefined) };
+    const adapter = new FirebirdSourceAdapter({ config: fbConfig, connectionFactory: vi.fn(async () => connection) });
+    await adapter.connect();
+    const fks = await adapter.listForeignKeys();
+    expect(fks).toEqual([
+      { fromTable: "DESCONTO_PRODUTOS", fromColumn: "PRODUTO_ID", toTable: "PRODUTOS", toColumn: "ID", constraintName: "FK_DP" }
+    ]);
+  });
+
+  it("sampleRows usa FIRST n", async () => {
+    const query = vi.fn(async () => [{ ID: 1 }]);
+    const connection: FirebirdDriverConnection = { query, detach: vi.fn(async () => undefined) };
+    const adapter = new FirebirdSourceAdapter({ config: fbConfig, connectionFactory: vi.fn(async () => connection) });
+    await adapter.connect();
+    const rows = await adapter.sampleRows("PRODUTOS", 3);
+    expect(rows).toEqual([{ ID: 1 }]);
+    expect(query.mock.calls[0]?.[0]).toMatch(/first 3/i);
+  });
+
+  it("runReadOnlySelect rejeita escrita antes do driver", async () => {
+    const query = vi.fn(async () => []);
+    const connection: FirebirdDriverConnection = { query, detach: vi.fn(async () => undefined) };
+    const adapter = new FirebirdSourceAdapter({ config: fbConfig, connectionFactory: vi.fn(async () => connection) });
+    await adapter.connect();
+    await expect(adapter.runReadOnlySelect({ sql: "UPDATE PRODUTOS SET NOME='x'", limit: 5 })).rejects.toThrow();
+    expect(query).not.toHaveBeenCalled();
   });
 });
