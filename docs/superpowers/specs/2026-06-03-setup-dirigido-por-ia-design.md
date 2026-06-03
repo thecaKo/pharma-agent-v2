@@ -157,6 +157,24 @@ Estende `src/transport/protocol.ts` (tipos `ServerMessageType`/`ConnectorMessage
 - **Persistência ao aprovar:** credenciais via fluxo `connector.bootstrap.dbConfig`
   existente; mapping via `connector.config` (`ValidatedMappingConfig`). Poller não muda.
 
+### Início de sessão (canônico — REST inicia, socket transmite)
+
+Para os planos de neo e web concordarem, o início é **único e via REST**:
+
+1. **Web → neo (REST):** `POST /pharma-agent-catalog/companies/:companyId/ai-setup/sessions`.
+   Escopo por **company** (o web só conhece `companyId`); o neo **resolve internamente o
+   connector ativo** da company. Resposta: envelope `{ data: { sessionId } }`. Esse POST
+   registra a sessão (`AiSetupSessionRegistry`), dispara `ai.session.start` **neo→agente** e
+   inicia o loop do orquestrador.
+2. **Web → neo (socket.io):** após o POST, o web **entra na sala da company** (mesmo padrão
+   `emit('company', companyId)` do socket existente) para receber `audit.event`,
+   `ai.session.state` e `mapping.proposed`.
+3. **Web → neo (socket.io) emite SOMENTE:** `mapping.decision { sessionId, decision, editedMapping? }`
+   e `ai.session.abort { sessionId, reason }`. **Não existe `ai.session.start` web→neo** — o
+   gatilho é exclusivamente o POST REST. (`ai.session.start` só existe no canal neo→agente.)
+4. **Estado:** `GET /pharma-agent-catalog/companies/:companyId/ai-setup/sessions/:sessionId`
+   devolve a fase atual (apoio; a fonte de verdade ao vivo é o `ai.session.state` no socket).
+
 ---
 
 ## CONTRATO 3 — Artefato de mapping (saída da IA)
