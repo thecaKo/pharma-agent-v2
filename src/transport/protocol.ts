@@ -17,6 +17,12 @@ export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "co
 export type BatchNextAction = "continue" | "retry" | "reload_config";
 export type AdminCommand =
   | "schema.listTables"
+  | "schema.describeTable"
+  | "schema.listForeignKeys"
+  | "schema.sampleRows"
+  | "sql.runReadOnlySelect"
+  | "fs.readConfigFile"
+  | "registry.readKey"
   | "probe.engines"
   | "probe.odbc_dsns"
   | "probe.network"
@@ -501,6 +507,12 @@ function parseConfigUpdated(message: Record<string, unknown>): ConfigUpdatedMess
 
 const ADMIN_COMMANDS = new Set<AdminCommand>([
   "schema.listTables",
+  "schema.describeTable",
+  "schema.listForeignKeys",
+  "schema.sampleRows",
+  "sql.runReadOnlySelect",
+  "fs.readConfigFile",
+  "registry.readKey",
   "probe.engines",
   "probe.odbc_dsns",
   "probe.network",
