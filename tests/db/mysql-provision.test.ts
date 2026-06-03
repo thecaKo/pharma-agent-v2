@@ -43,4 +43,40 @@ describe("MySqlSourceAdapter.provisionReadonlyUser", () => {
     expect(calls[0]!.params).toContain("a-very-strong-password-1234");
     expect(calls[1]!.params).toContain("a-very-strong-password-1234");
   });
+
+  it("retorna fallback_no_privilege quando o GRANT falha por 1044/1142", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes("GRANT SELECT")) {
+          throw Object.assign(new Error("Access denied for user"), { errno: 1142 });
+        }
+        return [[], []];
+      }),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({ config, connectionFactory: vi.fn(async () => connection) });
+    await adapter.connect();
+
+    const result = await adapter.provisionReadonlyUser({
+      username: "pharma_connector_ro",
+      password: "pwd-1234567890-abcdefghij"
+    });
+
+    expect(result.outcome).toBe("fallback_no_privilege");
+  });
+
+  it("propaga erro normalizado para falhas que não são de privilégio", async () => {
+    const connection: MySqlDriverConnection = {
+      query: vi.fn(async () => {
+        throw Object.assign(new Error("connection lost"), { code: "ECONNRESET" });
+      }),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new MySqlSourceAdapter({ config, connectionFactory: vi.fn(async () => connection) });
+    await adapter.connect();
+
+    await expect(
+      adapter.provisionReadonlyUser({ username: "pharma_connector_ro", password: "pwd-1234567890-abcdefghij" })
+    ).rejects.toThrowError();
+  });
 });
