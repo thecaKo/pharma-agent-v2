@@ -1,4 +1,12 @@
-export type DatabaseDriver = "mysql" | "firebird" | "postgresql" | "mariadb" | "sqlserver";
+export const DATABASE_DRIVERS = [
+  "mysql",
+  "firebird",
+  "postgresql",
+  "mariadb",
+  "sqlserver"
+] as const;
+
+export type DatabaseDriver = (typeof DATABASE_DRIVERS)[number];
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 

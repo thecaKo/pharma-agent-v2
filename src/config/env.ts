@@ -1,4 +1,5 @@
 import type { ConfigValidationIssue, ConnectorConfig, DatabaseConfig, DatabaseDriver, LogLevel } from "./types.js";
+import { DATABASE_DRIVERS as DATABASE_DRIVER_VALUES } from "./types.js";
 
 export const REQUIRED_ENV = [
   "CONNECTOR_TOKEN",
@@ -29,7 +30,7 @@ export interface LoadConfigOptions {
   requireDatabase?: boolean;
 }
 
-const DATABASE_DRIVERS = new Set<DatabaseDriver>(["mysql", "firebird", "postgresql", "mariadb", "sqlserver"]);
+const DATABASE_DRIVERS = new Set<DatabaseDriver>(DATABASE_DRIVER_VALUES);
 const LOG_LEVELS = new Set<LogLevel>(["debug", "info", "warn", "error"]);
 
 function parsePositiveInteger(

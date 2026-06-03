@@ -139,6 +139,31 @@ describe("connector-setup-ws", () => {
     });
   });
 
+  it("parses valid postgresql manual setup payload", () => {
+    const command = parseConnectorSetupConfigCommand(
+      JSON.stringify({
+        id: "setup-pg",
+        type: CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
+        setupMethod: "manual",
+        driver: "postgresql",
+        host: "pg.local",
+        port: 5432,
+        database: "vetorfarma",
+        username: "app",
+        password: "secret"
+      })
+    );
+
+    expect(setupConfigToDatabaseConfig(command)).toEqual({
+      driver: "postgresql",
+      host: "pg.local",
+      port: 5432,
+      name: "vetorfarma",
+      user: "app",
+      password: "secret"
+    });
+  });
+
   it("rejects payload with unsupported driver", () => {
     expect(() =>
       parseConnectorSetupConfigCommand(
@@ -154,7 +179,25 @@ describe("connector-setup-ws", () => {
           password: "secret"
         })
       )
-    ).toThrow('driver must be "mysql", "firebird", "postgresql", "mariadb", or "sqlserver"');
+    ).toThrow("driver must be one of: mysql, firebird, postgresql, mariadb, sqlserver");
+  });
+
+  it("rejects payload with empty driver string", () => {
+    expect(() =>
+      parseConnectorSetupConfigCommand(
+        JSON.stringify({
+          id: "setup-empty",
+          type: CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
+          setupMethod: "manual",
+          driver: "",
+          host: "db.local",
+          port: 3306,
+          database: "pharma_db",
+          username: "app",
+          password: "secret"
+        })
+      )
+    ).toThrow("driver must be a non-empty string");
   });
 
   it("rejects malformed payload missing driver", () => {
