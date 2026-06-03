@@ -76,6 +76,61 @@ describe("source adapter fixture integrations", () => {
     expect(rows).toEqual([fixtureRows[0]]);
   });
 
+  it("MySQL adapter describeTable lists columns of the produtos fixture table", async () => {
+    const adapter = new MySqlSourceAdapter({
+      config: mysqlConfig,
+      connectionFactory: vi.fn(async () => ({
+        query: vi.fn(async () => [[{ name: "codigo", dataType: "varchar", nullable: "NO" }], []]),
+        end: vi.fn(async () => undefined)
+      }))
+    });
+    await adapter.connect();
+    const columns = await adapter.describeTable("produtos");
+    expect(columns).toEqual([{ name: "codigo", dataType: "varchar", nullable: false }]);
+  });
+
+  it("MySQL adapter listForeignKeys links desconto_produtos to produtos", async () => {
+    const adapter = new MySqlSourceAdapter({
+      config: mysqlConfig,
+      connectionFactory: vi.fn(async () => ({
+        query: vi.fn(async () => [[
+          { fromTable: "desconto_produtos", fromColumn: "produto_id", toTable: "produtos", toColumn: "id", constraintName: "fk_dp" }
+        ], []]),
+        end: vi.fn(async () => undefined)
+      }))
+    });
+    await adapter.connect();
+    const fks = await adapter.listForeignKeys("desconto_produtos");
+    expect(fks).toEqual([
+      { fromTable: "desconto_produtos", fromColumn: "produto_id", toTable: "produtos", toColumn: "id", constraintName: "fk_dp" }
+    ]);
+  });
+
+  it("MySQL adapter sampleRows applies a numeric LIMIT to the fabricante_produtos table", async () => {
+    const query = vi.fn(async () => [[{ produto_id: "P-001", fabricante: "ACME" }], []]);
+    const adapter = new MySqlSourceAdapter({
+      config: mysqlConfig,
+      connectionFactory: vi.fn(async () => ({ query, end: vi.fn(async () => undefined) }))
+    });
+    await adapter.connect();
+    const rows = await adapter.sampleRows("fabricante_produtos", 3);
+    expect(rows).toEqual([{ produto_id: "P-001", fabricante: "ACME" }]);
+    expect(query.mock.calls[0]?.[0]).toMatch(/limit 3/i);
+  });
+
+  it("MySQL adapter runReadOnlySelect runs a validated SELECT and rejects writes", async () => {
+    const query = vi.fn(async () => [[{ codigo: "P-001" }], []]);
+    const adapter = new MySqlSourceAdapter({
+      config: mysqlConfig,
+      connectionFactory: vi.fn(async () => ({ query, end: vi.fn(async () => undefined) }))
+    });
+    await adapter.connect();
+    const rows = await adapter.runReadOnlySelect({ sql: "SELECT codigo FROM produtos", limit: 25 });
+    expect(rows).toEqual([{ codigo: "P-001" }]);
+    expect(query.mock.calls[0]?.[0]).toMatch(/limit 25/i);
+    await expect(adapter.runReadOnlySelect({ sql: "DELETE FROM produtos", limit: 10 })).rejects.toThrow();
+  });
+
   it("poller converts fixture rows into a product batch with cursor before and after metadata", async () => {
     const mapping = validateMappingConfig(
       validMapping({

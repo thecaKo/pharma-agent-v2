@@ -5,8 +5,10 @@ import { normalizeDatabaseError } from "./errors.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
+  ForeignKey,
   QueryChangesInput,
   QuerySnapshotPageInput,
+  RunReadOnlySelectInput,
   SourceDatabaseAdapter
 } from "./source-adapter.js";
 
@@ -185,6 +187,11 @@ export class SqlServerSourceAdapter implements SourceDatabaseAdapter {
     };
   }
 
+  public async describeTable(): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
+  public async listForeignKeys(): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
+  public async sampleRows(): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
+  public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
+
   private requireConnection(operation: DatabaseOperation = "query"): SqlServerDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -283,4 +290,8 @@ function normalizeCursorParam(value: QueryChangesInput["cursor"]): unknown {
   if (trimmed.length === 0) return null;
   const parsedAt = Date.parse(trimmed);
   return Number.isNaN(parsedAt) ? trimmed : new Date(parsedAt);
+}
+
+function notSupported(op: string): Error {
+  return new Error(`${op} is not supported for this driver`);
 }

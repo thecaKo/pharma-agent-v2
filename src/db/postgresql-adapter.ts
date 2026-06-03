@@ -5,8 +5,10 @@ import { normalizeDatabaseError } from "./errors.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
+  ForeignKey,
   QueryChangesInput,
   QuerySnapshotPageInput,
+  RunReadOnlySelectInput,
   SourceDatabaseAdapter
 } from "./source-adapter.js";
 
@@ -171,6 +173,11 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
+  public async describeTable(): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
+  public async listForeignKeys(): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
+  public async sampleRows(): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
+  public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
+
   private requireConnection(operation: DatabaseOperation = "query"): PostgresDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -286,4 +293,8 @@ function readNullable(value: unknown): boolean | undefined {
   if (normalized === "yes") return true;
   if (normalized === "no") return false;
   return undefined;
+}
+
+function notSupported(op: string): Error {
+  return new Error(`${op} is not supported for this driver`);
 }
