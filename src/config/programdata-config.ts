@@ -185,6 +185,47 @@ export async function writeDatabaseConfig(
   await writeFile(filePath, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
 }
 
+export interface ReadonlyProvisioningMetadata {
+  status: "provisioned" | "fallback_discovered" | "not_attempted";
+  username?: string;
+  engine: string;
+  provisionedAt: string;
+}
+
+export async function writeReadonlyProvisioningConfig(
+  programData: string | undefined,
+  input: { database: DatabaseConfig; readonlyProvisioning: ReadonlyProvisioningMetadata }
+): Promise<void> {
+  const filePath = defaultProgramDataConfigPath(programData);
+  await mkdir(dirname(filePath), { recursive: true });
+
+  let current: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(filePath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    current = isPlainRecord(parsed) ? parsed : {};
+  } catch (err) {
+    if (!isMissingFileError(err)) {
+      throw new ProgramDataConfigError(
+        "Could not read existing connector config file before writing readonly provisioning section."
+      );
+    }
+    current = {};
+  }
+
+  const provisioning: ReadonlyProvisioningMetadata = {
+    status: input.readonlyProvisioning.status,
+    engine: input.readonlyProvisioning.engine,
+    provisionedAt: input.readonlyProvisioning.provisionedAt,
+    ...(input.readonlyProvisioning.username !== undefined
+      ? { username: input.readonlyProvisioning.username }
+      : {})
+  };
+
+  const next = { ...current, database: input.database, readonlyProvisioning: provisioning };
+  await writeFile(filePath, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
+}
+
 function isMissingFileError(error: unknown): boolean {
   return (
     typeof error === "object" &&
