@@ -2,11 +2,15 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
+import { ReadOnlySqlError } from "./readonly-sql.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
+  ForeignKey,
   QueryChangesInput,
   QuerySnapshotPageInput,
+  RunReadOnlySelectInput,
   SourceDatabaseAdapter
 } from "./source-adapter.js";
 
@@ -185,6 +189,44 @@ export class SqlServerSourceAdapter implements SourceDatabaseAdapter {
     };
   }
 
+  public async describeTable(_tableName: string): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
+  public async listForeignKeys(_tableName?: string): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
+  public async sampleRows(_tableName: string, _limit: number): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
+  public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
+
+  public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
+    const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
+    const login = quoteSqlServerIdentifier(input.username);
+    try {
+      // CREATE/ALTER LOGIN via sp_executesql: identificador quotado por QUOTENAME,
+      // senha entra como parâmetro @pwd do dinâmico (nunca concatenada).
+      await connection.query(
+        `DECLARE @sql nvarchar(max);
+         IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = @user)
+           SET @sql = N'CREATE LOGIN ' + QUOTENAME(@user) + N' WITH PASSWORD = ' + QUOTENAME(@pwd, '''');
+         ELSE
+           SET @sql = N'ALTER LOGIN ' + QUOTENAME(@user) + N' WITH PASSWORD = ' + QUOTENAME(@pwd, '''');
+         EXEC sp_executesql @sql;`,
+        { user: input.username, pwd: input.password }
+      );
+      await connection.query(
+        `DECLARE @sql nvarchar(max);
+         IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @user)
+           SET @sql = N'CREATE USER ' + QUOTENAME(@user) + N' FOR LOGIN ' + QUOTENAME(@user);
+         IF @sql IS NOT NULL EXEC sp_executesql @sql;`,
+        { user: input.username }
+      );
+      await connection.query(`ALTER ROLE db_datareader ADD MEMBER ${login};`, {});
+      return { outcome: "provisioned", grantedScope: "all_tables" };
+    } catch (error) {
+      if (isSqlServerPrivilegeError(error)) {
+        return { outcome: "fallback_no_privilege", grantedScope: "all_tables" };
+      }
+      throw normalizeDatabaseError({ driver: "sqlserver", operation: "provision", error, secrets: this.secrets });
+    }
+  }
+
   private requireConnection(operation: DatabaseOperation = "query"): SqlServerDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -283,4 +325,22 @@ function normalizeCursorParam(value: QueryChangesInput["cursor"]): unknown {
   if (trimmed.length === 0) return null;
   const parsedAt = Date.parse(trimmed);
   return Number.isNaN(parsedAt) ? trimmed : new Date(parsedAt);
+}
+
+function notSupported(op: string): Error {
+  return new Error(`${op} is not supported for this driver`);
+}
+
+function quoteSqlServerIdentifier(name: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) {
+    throw new ReadOnlySqlError(`identificador inválido para SQL Server: ${name}`);
+  }
+  return `[${name}]`;
+}
+
+function isSqlServerPrivilegeError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const num = (error as { number?: unknown }).number ?? (error as { code?: unknown }).code;
+  const numeric = typeof num === "number" ? num : Number(num);
+  return numeric === 229 || numeric === 15247;
 }

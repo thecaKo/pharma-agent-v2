@@ -463,7 +463,7 @@ describe("WebSocketTransportClient", () => {
     server.sendJson({
       type: "admin.request",
       requestId: "req-1",
-      command: "schema.describeTable"
+      command: "fs.writeFile"
     });
     await waitFor(() => logs.join("\n").includes("Unsupported admin command"));
 

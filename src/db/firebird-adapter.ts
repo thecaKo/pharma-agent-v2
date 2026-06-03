@@ -2,7 +2,12 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
-import type { DatabaseColumn, DatabaseTable, QueryChangesInput, QuerySnapshotPageInput, SourceDatabaseAdapter } from "./source-adapter.js";
+import { validateReadOnlySelect, ReadOnlySqlError } from "./readonly-sql.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
+import type {
+  DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput,
+  QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter
+} from "./source-adapter.js";
 
 export interface FirebirdConnectionConfig {
   host: string;
@@ -193,6 +198,106 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
+  public async describeTable(tableName: string): Promise<DatabaseColumn[]> {
+    return this.listColumns(tableName);
+  }
+
+  public async listForeignKeys(tableName?: string): Promise<ForeignKey[]> {
+    const connection = this.requireConnection("listColumns");
+    try {
+      const params: unknown[] = [];
+      let filter = "";
+      if (tableName !== undefined) {
+        filter = "and rc.rdb$relation_name = ?";
+        params.push(tableName);
+      }
+      const result = await connection.query(
+        `
+          select rc.rdb$relation_name as fromTable,
+                 sf.rdb$field_name as fromColumn,
+                 rc2.rdb$relation_name as toTable,
+                 sf2.rdb$field_name as toColumn,
+                 rc.rdb$constraint_name as constraintName
+          from rdb$relation_constraints rc
+          join rdb$ref_constraints ref on ref.rdb$constraint_name = rc.rdb$constraint_name
+          join rdb$relation_constraints rc2 on rc2.rdb$constraint_name = ref.rdb$const_name_uq
+          join rdb$index_segments sf on sf.rdb$index_name = rc.rdb$index_name
+          join rdb$index_segments sf2 on sf2.rdb$index_name = rc2.rdb$index_name
+          where rc.rdb$constraint_type = 'FOREIGN KEY'
+            ${filter}
+          order by rc.rdb$relation_name
+        `,
+        params
+      );
+      return normalizeForeignKeys(result);
+    } catch (error) {
+      throw normalizeDatabaseError({ driver: "firebird", operation: "listColumns", error, secrets: this.secrets });
+    }
+  }
+
+  public async sampleRows(tableName: string, limit: number): Promise<SourceRow[]> {
+    const safeLimit = clampSampleLimit(limit);
+    const safeTable = quoteFirebirdIdentifier(tableName);
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(`select first ${safeLimit} * from ${safeTable}`, []);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({ driver: "firebird", operation: "query", error, secrets: this.secrets });
+    }
+  }
+
+  public async runReadOnlySelect(input: RunReadOnlySelectInput): Promise<SourceRow[]> {
+    const validated = validateReadOnlySelect(input.sql, { maxLimit: clampSampleLimit(input.limit) });
+    if (!validated.ok) {
+      throw new ReadOnlySqlError(validated.error);
+    }
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(validated.sql, []);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({ driver: "firebird", operation: "query", error, secrets: this.secrets });
+    }
+  }
+
+  public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
+    const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
+    const user = quoteFirebirdIdentifier(input.username);
+
+    // Fase 1: cria/altera o usuário e lista as relações. Uma falha de privilégio
+    // aqui significa que nada foi provisionado → fallback seguro para a descoberta.
+    let tables: string[];
+    try {
+      await connection.query(`CREATE OR ALTER USER ${user} PASSWORD ?`, [input.password]);
+      const rows = await connection.query(
+        `SELECT RDB$RELATION_NAME FROM RDB$RELATIONS
+         WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL`,
+        []
+      );
+      tables = extractFirebirdRelationNames(rows);
+    } catch (error) {
+      if (isFirebirdPrivilegeError(error)) {
+        return { outcome: "fallback_no_privilege", grantedScope: "all_tables" };
+      }
+      throw normalizeDatabaseError({ driver: "firebird", operation: "provision", error, secrets: this.secrets });
+    }
+
+    // Fase 2: GRANT SELECT por tabela. Se QUALQUER grant falhar no meio do loop,
+    // ABORTA e propaga como erro — nunca como fallback_no_privilege. O usuário teria
+    // grants parciais; o runtime trata o erro revertendo para a credencial descoberta,
+    // garantindo que a conexão ativa nunca passe a um RO com permissões incompletas.
+    for (const table of tables) {
+      try {
+        await connection.query(`GRANT SELECT ON ${quoteFirebirdIdentifier(table)} TO ${user}`, []);
+      } catch (error) {
+        throw normalizeDatabaseError({ driver: "firebird", operation: "provision", error, secrets: this.secrets });
+      }
+    }
+    return { outcome: "provisioned", grantedScope: "all_tables" };
+  }
+
   private requireConnection(operation: DatabaseOperation = "query"): FirebirdDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -264,6 +369,49 @@ function readColumn(row: unknown): DatabaseColumn | undefined {
     dataType: normalizeOptionalString(row.dataType ?? row.DATA_TYPE ?? row.DATATYPE),
     nullable: normalizeNullable(row.nullable ?? row.NULLABLE)
   };
+}
+
+function normalizeForeignKeys(result: unknown): ForeignKey[] {
+  if (!Array.isArray(result)) return [];
+  return result.filter(isRecord).flatMap((row) => {
+    const fromTable = normalizeString(row.fromTable ?? row.FROMTABLE ?? row.RDB$RELATION_NAME);
+    const fromColumn = normalizeString(row.fromColumn ?? row.FROMCOLUMN);
+    const toTable = normalizeString(row.toTable ?? row.TOTABLE);
+    const toColumn = normalizeString(row.toColumn ?? row.TOCOLUMN);
+    if (!fromTable || !fromColumn || !toTable || !toColumn) return [];
+    const constraintName = normalizeString(row.constraintName ?? row.CONSTRAINTNAME);
+    return [{ fromTable, fromColumn, toTable, toColumn, ...(constraintName ? { constraintName } : {}) }];
+  });
+}
+
+function clampSampleLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit < 1) return 1;
+  return Math.min(Math.trunc(limit), 1000);
+}
+
+function quoteFirebirdIdentifier(name: string): string {
+  if (!/^[A-Za-z0-9_$]+$/u.test(name)) {
+    throw new ReadOnlySqlError(`nome de tabela inválido: ${name}`);
+  }
+  return `"${name}"`;
+}
+
+function extractFirebirdRelationNames(rows: unknown): string[] {
+  if (!Array.isArray(rows)) return [];
+  const names: string[] = [];
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null) continue;
+    const raw = (row as Record<string, unknown>)["RDB$RELATION_NAME"];
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      names.push(raw.trim());
+    }
+  }
+  return names;
+}
+
+function isFirebirdPrivilegeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no permission/i.test(message);
 }
 
 function isRecord(value: unknown): value is SourceRow {

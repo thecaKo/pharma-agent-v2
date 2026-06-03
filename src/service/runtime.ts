@@ -30,8 +30,21 @@ import type {
   ConnectorDiscoveryMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
-import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage, buildConnectorDiscoveryMessage } from "../transport/protocol.js";
-import { writeDatabaseConfig } from "../config/programdata-config.js";
+import {
+  buildAdminErrorResponseMessage,
+  buildAdminSuccessResponseMessage,
+  buildConnectorDiscoveryMessage,
+  buildProvisionReadonlyUserResult,
+  type ProvisionReadonlyUserMessage,
+  type ProvisionReadonlyUserResultMessage,
+  type ProvisionErrorCode
+} from "../transport/protocol.js";
+import {
+  writeDatabaseConfig,
+  writeReadonlyProvisioningConfig,
+  type ReadonlyProvisioningMetadata
+} from "../config/programdata-config.js";
+import { generateReadonlyPassword } from "../db/provision-password.js";
 import {
   buildSetupConfigFailureResult,
   buildSetupConfigSuccessResult,
@@ -56,6 +69,15 @@ import {
 import { WebSocketTransportClient } from "../transport/ws-client.js";
 import { BootstrapState } from "./bootstrap-state.js";
 import { handleAdminRequest, type AdminRouterDependencies } from "../discovery/admin-router.js";
+import { AiSessionManager } from "./ai-session-manager.js";
+import { buildAiSessionDeps, buildRuntimeAdminDeps } from "./ai-session-wiring.js";
+import type {
+  AiSessionStartCommand,
+  ToolInvokeCommand,
+  MappingDecisionCommand,
+  AiSessionAbortCommand
+} from "../ai-session/ai-protocol.js";
+import type { AiSessionOutboundMessage } from "../ai-session/ai-session.js";
 import { probeEngines } from "../discovery/engines.js";
 import { probeOdbcDsns } from "../discovery/odbc-dsns.js";
 import { probeNetwork, tcpProbe } from "../discovery/network.js";
@@ -69,6 +91,18 @@ import { listWindowsProcesses } from "../discovery/process-list.js";
 import { listWindowsConnections } from "../discovery/connection-list.js";
 import type { ProbeContext } from "../discovery/types.js";
 import { CONNECTOR_VERSION } from "../version.js";
+
+type ProbeRouterDependencies = Pick<
+  AdminRouterDependencies,
+  | "probeEngines"
+  | "probeOdbcDsns"
+  | "probeNetwork"
+  | "probeTestConnection"
+  | "probeProcesses"
+  | "probeConnections"
+  | "probeScanConfigDirs"
+  | "schemaListTables"
+>;
 
 export interface RuntimeTransport {
   on(event: "connected", listener: () => void): this;
@@ -84,6 +118,11 @@ export interface RuntimeTransport {
   ): this;
   on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
   on(event: "bootstrapDbConfig", listener: (message: BootstrapDbConfigMessage) => void): this;
+  on(event: "aiSessionStart", listener: (command: AiSessionStartCommand) => void): this;
+  on(event: "aiToolInvoke", listener: (command: ToolInvokeCommand) => void): this;
+  on(event: "aiMappingDecision", listener: (command: MappingDecisionCommand) => void): this;
+  on(event: "aiSessionAbort", listener: (command: AiSessionAbortCommand) => void): this;
+  on(event: "provisionReadonlyUser", listener: (message: ProvisionReadonlyUserMessage) => void): this;
   connect(): Promise<void>;
   close(): Promise<void>;
   isConnected(): boolean;
@@ -107,6 +146,8 @@ export interface RuntimeTransport {
   sendFileDiscoveryScanResult(message: FileDiscoveryScanResultMessage): void;
   sendConnectorSetupConfigResult(message: ConnectorSetupConfigResultMessage): void;
   sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void;
+  sendAiSessionMessage(message: AiSessionOutboundMessage): void;
+  sendProvisionReadonlyUserResult(message: ProvisionReadonlyUserResultMessage): void;
   getReconnectAttemptCount(): number;
 }
 
@@ -131,6 +172,11 @@ export interface ConnectorRuntimeOptions {
   now?: () => string;
   discoverDsns?: () => Promise<PostgresDsnCandidate[]>;
   discoveryTimeoutMs?: number;
+  createReadonlyAdapter?: (database: DatabaseConfig) => SourceDatabaseAdapter;
+  writeReadonlyProvisioningConfig?: (
+    programData: string | undefined,
+    input: { database: DatabaseConfig; readonlyProvisioning: ReadonlyProvisioningMetadata }
+  ) => Promise<void>;
 }
 
 export interface ConnectorRuntimeState {
@@ -175,6 +221,7 @@ export class ConnectorRuntime {
   private activeMapping?: ValidatedMappingConfig;
   private activeConnectorId?: string;
   private activeCustomerId?: string;
+  private aiSessionManager?: AiSessionManager;
   private inFlightBatch?: ProductChangeBatch;
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
@@ -191,6 +238,11 @@ export class ConnectorRuntime {
   private discoverySnapshotPromise?: Promise<PostgresDsnCandidate[]>;
   private hasEmittedDiscoverySnapshot = false;
   private readonly bootstrapState = new BootstrapState();
+  private readonly createReadonlyAdapterFn: (database: DatabaseConfig) => SourceDatabaseAdapter;
+  private readonly writeReadonlyProvisioningFn: (
+    programData: string | undefined,
+    input: { database: DatabaseConfig; readonlyProvisioning: ReadonlyProvisioningMetadata }
+  ) => Promise<void>;
 
   public constructor(options: ConnectorRuntimeOptions = {}) {
     this.env = options.env;
@@ -234,6 +286,16 @@ export class ConnectorRuntime {
     this.discoverDsnsFn =
       options.discoverDsns ?? (() => discoverPostgresDsns(createRegExeRegistryReader()));
     this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 3000;
+    this.createReadonlyAdapterFn =
+      options.createReadonlyAdapter ??
+      ((database) =>
+        createSourceDatabaseAdapter({
+          config: database,
+          dependencies: this.adapterDependencies,
+          secrets: runtimeConfigSecrets(this.config)
+        }));
+    this.writeReadonlyProvisioningFn =
+      options.writeReadonlyProvisioningConfig ?? writeReadonlyProvisioningConfig;
     this.bindTransportEvents();
   }
 
@@ -381,6 +443,44 @@ export class ConnectorRuntime {
       this.applyBootstrapDbConfig(message).catch((error) =>
         this.handleRuntimeError("BOOTSTRAP_DB_CONFIG_FAILED", error)
       );
+    });
+    this.transport.on("provisionReadonlyUser", (message) => {
+      this.handleProvisionReadonlyUser(message).catch((error) =>
+        this.handleRuntimeError("PROVISION_READONLY_FAILED", error)
+      );
+    });
+
+    const manager = new AiSessionManager({
+      emit: (message) => this.transport.sendAiSessionMessage(message),
+      buildDeps: () =>
+        buildAiSessionDeps({
+          handleAdminRequest: (req) => handleAdminRequest(req, this.buildFullAdminRouterDeps()),
+          secrets: () => runtimeConfigSecrets(this.config),
+          now: this.now,
+          writeDatabaseConfig,
+          programData: this.configuredProgramDataPath(),
+          currentDatabase: () => this.config.database,
+          currentEngine: () => this.config.database?.driver ?? "unknown",
+          activateMapping: (mapping) =>
+            this.activateMapping({
+              connectorId: this.activeConnectorId ?? "ai-session",
+              customerId: this.activeCustomerId ?? "ai-session",
+              mapping
+            })
+        })
+    });
+    this.aiSessionManager = manager;
+    this.transport.on("aiSessionStart", (command) => {
+      void manager.onStart(command);
+    });
+    this.transport.on("aiToolInvoke", (command) => {
+      void manager.onToolInvoke(command);
+    });
+    this.transport.on("aiMappingDecision", (command) => {
+      void manager.onDecision(command);
+    });
+    this.transport.on("aiSessionAbort", (command) => {
+      manager.onAbort(command);
     });
   }
 
@@ -579,7 +679,7 @@ export class ConnectorRuntime {
       requestId: request.requestId,
       command: request.command
     });
-    const deps = this.buildAdminRouterDeps();
+    const deps = this.buildFullAdminRouterDeps();
     const response = await handleAdminRequest(request, deps);
     this.transport.sendAdminResponse(response);
     this.logger.info("admin.probe.responded", {
@@ -589,7 +689,7 @@ export class ConnectorRuntime {
     });
   }
 
-  private buildAdminRouterDeps(): AdminRouterDependencies {
+  private buildAdminRouterDeps(): ProbeRouterDependencies {
     const registry = createRegExeRegistryReader();
     const buildProbeContext = (): ProbeContext => ({
       registry,
@@ -686,6 +786,15 @@ export class ConnectorRuntime {
       },
       schemaListTables: async () => []
     };
+  }
+
+  private buildFullAdminRouterDeps(): AdminRouterDependencies {
+    return buildRuntimeAdminDeps({
+      getAdapter: () => this.ensureAdapterConnected(),
+      fs: nodeFileSystemReader,
+      registry: createRegExeRegistryReader(),
+      probeDeps: this.buildAdminRouterDeps()
+    });
   }
 
   private async handleSetupConfig(request: ConnectorSetupConfigCommand): Promise<void> {
@@ -835,6 +944,119 @@ export class ConnectorRuntime {
 
     this.sendHeartbeat();
     await this.resumeSavedMappingIfAvailable();
+  }
+
+  private async handleProvisionReadonlyUser(message: ProvisionReadonlyUserMessage): Promise<void> {
+    const database = this.config.database;
+    const engine = database?.driver ?? "unknown";
+    const respond = (
+      outcome: "provisioned" | "fallback_no_privilege" | "unsupported_engine" | "error",
+      errorCode?: ProvisionErrorCode
+    ): void => {
+      this.transport.sendProvisionReadonlyUserResult(
+        buildProvisionReadonlyUserResult(
+          {
+            requestId: message.requestId,
+            sessionId: message.sessionId,
+            outcome,
+            username: message.username,
+            ...(errorCode ? { errorCode } : {})
+          },
+          this.now()
+        )
+      );
+    };
+
+    if (!database) {
+      respond("error", "unknown");
+      return;
+    }
+
+    const password = generateReadonlyPassword();
+    const secrets = [...runtimeConfigSecrets(this.config), password];
+
+    let adminAdapter: SourceDatabaseAdapter;
+    try {
+      adminAdapter = await this.ensureAdapterConnected();
+    } catch {
+      respond("error", "unreachable");
+      return;
+    }
+
+    let provisionResult;
+    try {
+      provisionResult = await adminAdapter.provisionReadonlyUser({
+        username: message.username,
+        password
+      });
+    } catch (error) {
+      this.logger.warn("provision.readonly.failed", {
+        requestId: message.requestId,
+        message: redactString(error instanceof Error ? error.message : String(error), secrets)
+      });
+      await this.persistProvisioning(database, { status: "fallback_discovered", engine });
+      respond("error", classifyProvisionError(error));
+      return;
+    }
+
+    if (provisionResult.outcome === "fallback_no_privilege") {
+      await this.persistProvisioning(database, { status: "fallback_discovered", engine });
+      respond("fallback_no_privilege");
+      return;
+    }
+
+    // provisioned: monta credencial RO, valida com SELECT, troca a conexão ativa.
+    const roDatabase: DatabaseConfig = { ...database, user: message.username, password };
+    const roAdapter = this.createReadonlyAdapterFn(roDatabase);
+    try {
+      await roAdapter.connect();
+      await roAdapter.runReadOnlySelect({ sql: "select 1", limit: 1 });
+    } catch (error) {
+      await roAdapter.close().catch(() => undefined);
+      this.logger.warn("provision.readonly.validation_failed", {
+        requestId: message.requestId,
+        message: redactString(error instanceof Error ? error.message : String(error), secrets)
+      });
+      await this.persistProvisioning(database, { status: "fallback_discovered", engine });
+      respond("error", classifyProvisionError(error));
+      return;
+    }
+
+    const previousAdapter = this.adapter;
+    this.adapter = roAdapter;
+    this.adapterConnected = true;
+    this.config = { ...this.config, database: roDatabase };
+    if (previousAdapter && previousAdapter !== roAdapter) {
+      await previousAdapter.close().catch(() => undefined);
+    }
+
+    await this.persistProvisioning(roDatabase, {
+      status: "provisioned",
+      username: message.username,
+      engine
+    });
+    this.logger.info("provision.readonly.provisioned", {
+      requestId: message.requestId,
+      sessionId: message.sessionId,
+      engine
+    });
+    respond("provisioned");
+  }
+
+  private async persistProvisioning(
+    database: DatabaseConfig,
+    meta: { status: ReadonlyProvisioningMetadata["status"]; username?: string; engine: string }
+  ): Promise<void> {
+    const readonlyProvisioning: ReadonlyProvisioningMetadata = {
+      status: meta.status,
+      engine: meta.engine,
+      provisionedAt: this.now(),
+      ...(meta.username !== undefined ? { username: meta.username } : {})
+    };
+    await this.writeReadonlyProvisioningFn(this.configuredProgramDataPath(), {
+      database,
+      readonlyProvisioning
+    });
   }
 
   private async handleFileDiscoveryScan(request: { correlationId: string; rootPath?: string }): Promise<void> {
@@ -1309,6 +1531,19 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
       };
     }
   };
+}
+
+function classifyProvisionError(error: unknown): ProvisionErrorCode {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code).toLowerCase()
+    : "";
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const haystack = `${code} ${message}`;
+  if (haystack.includes("timeout") || haystack.includes("timedout")) return "timeout";
+  if (haystack.includes("econnrefused") || haystack.includes("econnreset") || haystack.includes("unreachable") || haystack.includes("network")) return "unreachable";
+  if (haystack.includes("auth") || haystack.includes("denied") || haystack.includes("password")) return "auth";
+  if (haystack.includes("syntax")) return "syntax";
+  return "unknown";
 }
 
 function runtimeConfigSecrets(config: ConnectorRuntimeConfig): string[] {

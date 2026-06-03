@@ -12,11 +12,18 @@ export type ServerMessageType =
   | "batch.ack"
   | "config.updated"
   | "admin.request"
-  | "connector.bootstrap.dbConfig";
-export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response" | "connector.discovery";
+  | "connector.bootstrap.dbConfig"
+  | "connector.provisionReadonlyUser";
+export type ConnectorMessageType = "connector.heartbeat" | "product.batch" | "connector.error" | "admin.response" | "connector.discovery" | "connector.provisionReadonlyUser.result";
 export type BatchNextAction = "continue" | "retry" | "reload_config";
 export type AdminCommand =
   | "schema.listTables"
+  | "schema.describeTable"
+  | "schema.listForeignKeys"
+  | "schema.sampleRows"
+  | "sql.runReadOnlySelect"
+  | "fs.readConfigFile"
+  | "registry.readKey"
   | "probe.engines"
   | "probe.odbc_dsns"
   | "probe.network"
@@ -75,12 +82,35 @@ export interface BootstrapDbConfigMessage {
   sentAt?: string;
 }
 
+export type ProvisionOutcomeWire = "provisioned" | "fallback_no_privilege" | "unsupported_engine" | "error";
+export type ProvisionErrorCode = "auth" | "timeout" | "unreachable" | "syntax" | "unknown";
+
+export interface ProvisionReadonlyUserMessage {
+  type: "connector.provisionReadonlyUser";
+  requestId: string;
+  sessionId: string;
+  username: string;
+  sentAt?: string;
+}
+
+export interface ProvisionReadonlyUserResultMessage {
+  type: "connector.provisionReadonlyUser.result";
+  requestId: string;
+  sessionId: string;
+  outcome: ProvisionOutcomeWire;
+  username: string;
+  grantedScope: "all_tables";
+  errorCode?: ProvisionErrorCode;
+  sentAt?: string;
+}
+
 export type ServerMessage =
   | ConnectorConfigMessage
   | BatchAckMessage
   | ConfigUpdatedMessage
   | AdminRequestMessage
-  | BootstrapDbConfigMessage;
+  | BootstrapDbConfigMessage
+  | ProvisionReadonlyUserMessage;
 
 export interface HeartbeatPayload {
   connectorVersion: string;
@@ -190,7 +220,8 @@ export type ConnectorMessage =
   | ProductBatchMessage
   | ConnectorErrorMessage
   | AdminResponseMessage
-  | ConnectorDiscoveryMessage;
+  | ConnectorDiscoveryMessage
+  | ProvisionReadonlyUserResultMessage;
 
 export class ProtocolParseError extends Error {
   public constructor(message: string) {
@@ -215,6 +246,8 @@ export function parseServerMessage(raw: string | Buffer | ArrayBuffer | Buffer[]
       return parseAdminRequest(message);
     case "connector.bootstrap.dbConfig":
       return parseBootstrapDbConfig(message);
+    case "connector.provisionReadonlyUser":
+      return parseProvisionReadonlyUser(message);
     default:
       throw new ProtocolParseError(`Unsupported server message type: ${type}`);
   }
@@ -501,6 +534,12 @@ function parseConfigUpdated(message: Record<string, unknown>): ConfigUpdatedMess
 
 const ADMIN_COMMANDS = new Set<AdminCommand>([
   "schema.listTables",
+  "schema.describeTable",
+  "schema.listForeignKeys",
+  "schema.sampleRows",
+  "sql.runReadOnlySelect",
+  "fs.readConfigFile",
+  "registry.readKey",
   "probe.engines",
   "probe.odbc_dsns",
   "probe.network",
@@ -558,6 +597,47 @@ function parseBootstrapDbConfig(message: Record<string, unknown>): BootstrapDbCo
     result.database.trustServerCertificate = database.trustServerCertificate;
   }
   return result;
+}
+
+const PROVISION_USERNAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{2,62}$/;
+
+function parseProvisionReadonlyUser(message: Record<string, unknown>): ProvisionReadonlyUserMessage {
+  const username = expectString(message.username, "username");
+  if (!PROVISION_USERNAME_PATTERN.test(username)) {
+    throw new ProtocolParseError("username must match ^[a-zA-Z][a-zA-Z0-9_]{2,62}$");
+  }
+  return {
+    type: "connector.provisionReadonlyUser",
+    requestId: validateRequestId(expectString(message.requestId, "requestId")),
+    sessionId: expectString(message.sessionId, "sessionId"),
+    username,
+    sentAt: optionalString(message.sentAt, "sentAt")
+  };
+}
+
+export function buildProvisionReadonlyUserResult(
+  input: {
+    requestId: string;
+    sessionId: string;
+    outcome: ProvisionOutcomeWire;
+    username: string;
+    errorCode?: ProvisionErrorCode;
+  },
+  sentAt = new Date().toISOString()
+): ProvisionReadonlyUserResultMessage {
+  const message: ProvisionReadonlyUserResultMessage = {
+    type: "connector.provisionReadonlyUser.result",
+    requestId: validateRequestId(input.requestId),
+    sessionId: input.sessionId,
+    outcome: input.outcome,
+    username: input.username,
+    grantedScope: "all_tables",
+    sentAt
+  };
+  if (input.outcome === "error" && input.errorCode !== undefined) {
+    message.errorCode = input.errorCode;
+  }
+  return message;
 }
 
 function parseMapping(value: unknown): ValidatedMappingConfig {

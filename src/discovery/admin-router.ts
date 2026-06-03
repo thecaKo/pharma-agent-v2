@@ -12,6 +12,10 @@ import type { ProcessCandidate } from "./processes.js";
 import type { ConnectionCandidate } from "./connections.js";
 import type { ScanConfigDirsInput, ScanConfigDirsResult } from "./scan-config-dirs.js";
 import { MAX_ROOTS } from "./scan-config-dirs.js";
+import type { DatabaseColumn, ForeignKey } from "../db/source-adapter.js";
+import type { SourceRow } from "../mapping/types.js";
+import type { ReadConfigFileResult } from "./read-config-file.js";
+import type { ReadRegistryKeyResult } from "./read-registry-key.js";
 
 const PROBE_VERSION = "1";
 
@@ -24,6 +28,12 @@ export interface AdminRouterDependencies {
   probeConnections: () => Promise<ConnectionCandidate[]>;
   probeScanConfigDirs: (input: ScanConfigDirsInput) => Promise<ScanConfigDirsResult>;
   schemaListTables: () => Promise<string[]>;
+  schemaDescribeTable: (table: string) => Promise<DatabaseColumn[]>;
+  schemaListForeignKeys: (table?: string) => Promise<ForeignKey[]>;
+  schemaSampleRows: (table: string, limit: number) => Promise<SourceRow[]>;
+  sqlRunReadOnlySelect: (input: { sql: string; limit: number }) => Promise<SourceRow[]>;
+  fsReadConfigFile: (input: { path: string }) => Promise<ReadConfigFileResult>;
+  registryReadKey: (input: { path: string }) => Promise<ReadRegistryKeyResult>;
 }
 
 export async function handleAdminRequest(
@@ -69,6 +79,42 @@ export async function handleAdminRequest(
       case "schema.listTables": {
         const tables = await deps.schemaListTables();
         return success(req, { tables });
+      }
+      case "schema.describeTable": {
+        const table = validateTableInput(req.input);
+        if (!table.ok) return invalidInput(req, table.error);
+        const columns = await deps.schemaDescribeTable(table.value);
+        return success(req, { columns });
+      }
+      case "schema.listForeignKeys": {
+        const table = optionalTableInput(req.input);
+        if (!table.ok) return invalidInput(req, table.error);
+        const foreignKeys = await deps.schemaListForeignKeys(table.value);
+        return success(req, { foreignKeys });
+      }
+      case "schema.sampleRows": {
+        const parsed = validateSampleRowsInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const rows = await deps.schemaSampleRows(parsed.value.table, parsed.value.limit);
+        return success(req, { rows });
+      }
+      case "sql.runReadOnlySelect": {
+        const parsed = validateRunSelectInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const rows = await deps.sqlRunReadOnlySelect(parsed.value);
+        return success(req, { rows });
+      }
+      case "fs.readConfigFile": {
+        const parsed = validatePathInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.fsReadConfigFile({ path: parsed.value });
+        return success(req, result);
+      }
+      case "registry.readKey": {
+        const parsed = validatePathInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.registryReadKey({ path: parsed.value });
+        return success(req, result);
       }
       default:
         return invalidInput(req, `Unsupported command: ${(req as { command: string }).command}`);
@@ -141,6 +187,57 @@ function validateTestConnectionInput(input: unknown): Validated<TestConnectionIn
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateTableInput(input: unknown): Validated<string> {
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
+  const table = input.table;
+  if (typeof table !== "string" || table.trim().length === 0) {
+    return { ok: false, error: "input.table must be a non-empty string" };
+  }
+  return { ok: true, value: table.trim() };
+}
+
+function optionalTableInput(input: unknown): Validated<string | undefined> {
+  if (input === undefined) return { ok: true, value: undefined };
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
+  if (input.table === undefined) return { ok: true, value: undefined };
+  if (typeof input.table !== "string" || input.table.trim().length === 0) {
+    return { ok: false, error: "input.table must be a non-empty string" };
+  }
+  return { ok: true, value: input.table.trim() };
+}
+
+function validateSampleRowsInput(input: unknown): Validated<{ table: string; limit: number }> {
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
+  if (typeof input.table !== "string" || input.table.trim().length === 0) {
+    return { ok: false, error: "input.table must be a non-empty string" };
+  }
+  const limit = input.limit ?? 20;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    return { ok: false, error: "input.limit must be an integer between 1 and 1000" };
+  }
+  return { ok: true, value: { table: input.table.trim(), limit } };
+}
+
+function validateRunSelectInput(input: unknown): Validated<{ sql: string; limit: number }> {
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
+  if (typeof input.sql !== "string" || input.sql.trim().length === 0) {
+    return { ok: false, error: "input.sql must be a non-empty string" };
+  }
+  const limit = input.limit ?? 100;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    return { ok: false, error: "input.limit must be an integer between 1 and 1000" };
+  }
+  return { ok: true, value: { sql: input.sql, limit } };
+}
+
+function validatePathInput(input: unknown): Validated<string> {
+  if (!isRecord(input)) return { ok: false, error: "input must be an object" };
+  if (typeof input.path !== "string" || input.path.trim().length === 0) {
+    return { ok: false, error: "input.path must be a non-empty string" };
+  }
+  return { ok: true, value: input.path.trim() };
 }
 
 function validateScanConfigDirsInput(input: unknown): Validated<ScanConfigDirsInput> {

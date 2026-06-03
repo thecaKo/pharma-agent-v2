@@ -1,5 +1,6 @@
 import type { SourceRow } from "../mapping/types.js";
 import type { CursorValue } from "../state/state-types.js";
+import type { ProvisionReadonlyUserInput, ProvisionReadonlyUserResult } from "./provision-types.js";
 
 export interface QueryChangesInput {
   sql: string;
@@ -23,6 +24,20 @@ export interface DatabaseColumn {
   nullable?: boolean;
 }
 
+export interface ForeignKey {
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  constraintName?: string;
+}
+
+export interface RunReadOnlySelectInput {
+  sql: string;
+  limit: number;
+  timeoutMs?: number;
+}
+
 export interface SourceDatabaseAdapter {
   connect(): Promise<void>;
   close(): Promise<void>;
@@ -30,6 +45,11 @@ export interface SourceDatabaseAdapter {
   querySnapshotPage(input: QuerySnapshotPageInput): Promise<SourceRow[]>;
   listTables(): Promise<DatabaseTable[]>;
   listColumns(tableName: string): Promise<DatabaseColumn[]>;
+  describeTable(tableName: string): Promise<DatabaseColumn[]>;
+  listForeignKeys(tableName?: string): Promise<ForeignKey[]>;
+  sampleRows(tableName: string, limit: number): Promise<SourceRow[]>;
+  runReadOnlySelect(input: RunReadOnlySelectInput): Promise<SourceRow[]>;
+  provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult>;
 }
 
 export type SourceDatabaseAdapterKind =

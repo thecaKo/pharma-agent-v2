@@ -415,7 +415,7 @@ describe("transport protocol", () => {
         JSON.stringify({
           type: "admin.request",
           requestId: "req-1",
-          command: "schema.describeTable"
+          command: "fs.writeFile"
         })
       )
     ).toThrow(ProtocolParseError);
