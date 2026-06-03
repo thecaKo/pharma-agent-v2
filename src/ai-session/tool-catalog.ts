@@ -31,7 +31,29 @@ const SPECS: ToolSpec[] = [
   { name: "sql.runReadOnlySelect", command: "sql.runReadOnlySelect", description: "Executa um SELECT validado (rejeita escrita, LIMIT forçado).", inputSchema: { type: "object", required: ["sql"], properties: { sql: { type: "string" }, limit: { type: "integer" } } }, outputSchema: { type: "object", properties: { rows: ARRAY } } }
 ];
 
-export const TOOL_NAMES: ReadonlySet<string> = new Set(SPECS.map((spec) => spec.name));
+export const PROPOSE_READONLY_USER_TOOL = "propose_readonly_user";
+
+const SIGNAL_DESCRIPTORS: ToolDescriptor[] = [
+  {
+    name: PROPOSE_READONLY_USER_TOOL,
+    description:
+      "Sinaliza ao operador a criação de um usuário somente-leitura dedicado. Não toca no banco; valida o nome e devolve o engine corrente.",
+    inputSchema: {
+      type: "object",
+      required: ["username"],
+      properties: { username: { type: "string" }, rationale: { type: "string" } }
+    },
+    outputSchema: {
+      type: "object",
+      properties: { accepted: { type: "boolean" }, username: { type: "string" }, engine: { type: "string" } }
+    }
+  }
+];
+
+export const TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SPECS.map((spec) => spec.name),
+  ...SIGNAL_DESCRIPTORS.map((d) => d.name)
+]);
 
 const NAME_TO_COMMAND = new Map<string, AdminCommand>(SPECS.map((spec) => [spec.name, spec.command]));
 
@@ -40,10 +62,13 @@ export function toolNameToAdminCommand(name: string): AdminCommand | undefined {
 }
 
 export function buildToolCatalog(): ToolDescriptor[] {
-  return SPECS.map((spec) => ({
-    name: spec.name,
-    description: spec.description,
-    inputSchema: spec.inputSchema,
-    outputSchema: spec.outputSchema
-  }));
+  return [
+    ...SPECS.map((spec) => ({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: spec.inputSchema,
+      outputSchema: spec.outputSchema
+    })),
+    ...SIGNAL_DESCRIPTORS
+  ];
 }
