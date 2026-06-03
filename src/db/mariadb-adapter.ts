@@ -159,9 +159,9 @@ export class MariaDbSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
-  public async describeTable(): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
-  public async listForeignKeys(): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
-  public async sampleRows(): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
+  public async describeTable(_tableName: string): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
+  public async listForeignKeys(_tableName?: string): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
+  public async sampleRows(_tableName: string, _limit: number): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
   public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
 
   private requireConnection(operation: DatabaseOperation = "query"): MariaDbDriverConnection {

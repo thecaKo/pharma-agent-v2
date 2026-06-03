@@ -29,10 +29,14 @@ export async function readConfigFile(
   ctx: ReadConfigFileContext,
   input: ReadConfigFileInput
 ): Promise<ReadConfigFileResult> {
-  const path = input.path.trim();
-  if (path.length === 0) {
+  const rawPath = input.path.trim();
+  if (rawPath.length === 0) {
     return { ok: false, errorCode: "INVALID_INPUT", message: "path é obrigatório" };
   }
+  if (hasTraversalSegment(rawPath)) {
+    return { ok: false, errorCode: "INVALID_INPUT", message: "path com traversal (..) não permitido" };
+  }
+  const path = normalizePath(rawPath);
   if (DENY_PATH_REGEXES.some((re) => re.test(path))) {
     return { ok: false, errorCode: "INVALID_INPUT", message: "path sob diretório negado" };
   }
@@ -53,6 +57,27 @@ export async function readConfigFile(
     return { ok: false, errorCode: "INVALID_INPUT", message: "arquivo excede o limite de tamanho" };
   }
   return { ok: true, path, content };
+}
+
+function hasTraversalSegment(rawPath: string): boolean {
+  return rawPath.split(/[\\/]/u).some((segment) => segment === "..");
+}
+
+// Normaliza separadores redundantes e segmentos "." preservando o estilo
+// (Windows com "\" vs POSIX com "/") para que a deny-list seja aplicada sobre
+// o path resolvido — segmentos ".." já foram rejeitados antes desta etapa.
+function normalizePath(rawPath: string): string {
+  const isWindows = /^[A-Za-z]:[\\/]/u.test(rawPath) || rawPath.includes("\\");
+  const sep = isWindows ? "\\" : "/";
+  const parts = rawPath.split(/[\\/]/u);
+  const out: string[] = [];
+  for (let idx = 0; idx < parts.length; idx += 1) {
+    const part = parts[idx];
+    if (part === ".") continue;
+    if (part === "" && idx !== 0 && idx !== parts.length - 1) continue;
+    out.push(part ?? "");
+  }
+  return out.join(sep);
 }
 
 function globMatch(name: string, pattern: string): boolean {

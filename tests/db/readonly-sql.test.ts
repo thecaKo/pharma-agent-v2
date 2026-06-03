@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateReadOnlySelect, ReadOnlySqlError } from "../../src/db/readonly-sql.js";
+import { validateReadOnlySelect, ReadOnlySqlError, MAX_SQL_BYTES } from "../../src/db/readonly-sql.js";
 
 describe("validateReadOnlySelect — aceitos", () => {
   it.each([
@@ -64,5 +64,20 @@ describe("validateReadOnlySelect — LIMIT", () => {
     const err = new ReadOnlySqlError("multi-statement não permitido");
     expect(err.name).toBe("ReadOnlySqlError");
     expect(err.message).toContain("multi-statement");
+  });
+});
+
+describe("validateReadOnlySelect — segurança defensiva", () => {
+  it("rejeita comentário de bloco não terminado", () => {
+    const r = validateReadOnlySelect("SELECT 1 /* sem fechar", { maxLimit: 100 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("comentário de bloco não terminado");
+  });
+
+  it("rejeita SQL acima do teto de tamanho", () => {
+    const big = `SELECT '${"x".repeat(MAX_SQL_BYTES)}' FROM produtos`;
+    expect(Buffer.byteLength(big, "utf8")).toBeGreaterThan(MAX_SQL_BYTES);
+    const r = validateReadOnlySelect(big, { maxLimit: 100 });
+    expect(r.ok).toBe(false);
   });
 });

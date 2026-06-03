@@ -59,4 +59,20 @@ describe("readConfigFile", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errorCode).toBe("unreachable");
   });
+
+  it("rejeita path com segmento de traversal (..)", async () => {
+    const fs = makeFs({ "C:\\x\\..\\..\\Windows\\system.ini": "x" });
+    const r = await readConfigFile({ fs }, { path: "C:\\x\\..\\..\\Windows\\system.ini" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errorCode).toBe("INVALID_INPUT");
+    expect(fs.readFile).not.toHaveBeenCalled();
+  });
+
+  it("rejeita path que após normalização cai em diretório negado", async () => {
+    const fs = makeFs({ "/etc/passwd.conf": "x" });
+    const r = await readConfigFile({ fs }, { path: "/etc/./passwd.conf" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errorCode).toBe("INVALID_INPUT");
+    expect(fs.readFile).not.toHaveBeenCalled();
+  });
 });

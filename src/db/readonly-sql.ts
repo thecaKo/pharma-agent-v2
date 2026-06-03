@@ -13,6 +13,8 @@ export type ValidateReadOnlySelectResult =
   | { ok: true; sql: string }
   | { ok: false; error: string };
 
+export const MAX_SQL_BYTES = 100 * 1024;
+
 const FORBIDDEN_KEYWORDS = [
   "insert", "update", "delete", "merge", "upsert", "replace",
   "create", "alter", "drop", "truncate", "rename",
@@ -24,8 +26,15 @@ export function validateReadOnlySelect(
   rawSql: string,
   options: ValidateReadOnlySelectOptions
 ): ValidateReadOnlySelectResult {
+  if (Buffer.byteLength(rawSql, "utf8") > MAX_SQL_BYTES) {
+    return { ok: false, error: "SQL excede o tamanho máximo permitido" };
+  }
+
   const stripped = stripComments(rawSql);
-  const trimmed = stripped.trim();
+  if (stripped.unterminated) {
+    return { ok: false, error: "comentário de bloco não terminado" };
+  }
+  const trimmed = stripped.text.trim();
   if (trimmed.length === 0) {
     return { ok: false, error: "SQL vazio após remover comentários" };
   }
@@ -53,7 +62,7 @@ export function validateReadOnlySelect(
   return { ok: true, sql: limited };
 }
 
-function stripComments(sql: string): string {
+function stripComments(sql: string): { text: string; unterminated: boolean } {
   let result = "";
   let i = 0;
   let inSingle = false;
@@ -83,6 +92,9 @@ function stripComments(sql: string): string {
     if (ch === "/" && next === "*") {
       i += 2;
       while (i < sql.length && !(sql[i] === "*" && sql[i + 1] === "/")) i += 1;
+      if (i >= sql.length) {
+        return { text: result, unterminated: true };
+      }
       i += 2;
       result += " ";
       continue;
@@ -90,7 +102,7 @@ function stripComments(sql: string): string {
     result += ch;
     i += 1;
   }
-  return result;
+  return { text: result, unterminated: false };
 }
 
 function literalSpans(sql: string): Array<[number, number]> {

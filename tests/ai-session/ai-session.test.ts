@@ -74,6 +74,15 @@ describe("AiSession", () => {
     const serialized = JSON.stringify(sent);
     expect(serialized).not.toContain(SECRET);
     expect(serialized).toContain("[REDACTED]");
+    // nenhum audit.event nem tool.result contém o segredo cru em qualquer nível
+    expect(
+      sent
+        .filter((m) => ["audit.event", "tool.result"].includes(m.type))
+        .every((m) => !JSON.stringify(m).includes(SECRET))
+    ).toBe(true);
+    // e [REDACTED] aparece onde o segredo estava (no tool.result do payload)
+    const toolResult = sent.find((m) => m.type === "tool.result" && m.invocationId === "i1");
+    expect(JSON.stringify(toolResult)).toContain("[REDACTED]");
   });
 
   it("ignora invocationId repetido (idempotência)", async () => {
@@ -95,6 +104,29 @@ describe("AiSession", () => {
     const state = sent.filter((m) => m.type === "ai.session.state").pop();
     expect(state.phase).toBe("aborted");
     expect(session.signal.aborted).toBe(true);
+  });
+
+  it("após abort, invokeTool é silenciosamente ignorado", async () => {
+    const deps = depsWith();
+    const { sent, emit } = collector();
+    const session = new AiSession({ sessionId: "s1", emit, deps });
+    await session.start();
+    session.abort("user");
+    sent.length = 0;
+    await session.invokeTool({ sessionId: "s1", invocationId: "i1", name: "schema.listTables", input: {} });
+    expect(sent.filter((m) => m.type === "tool.result")).toHaveLength(0);
+    expect(deps.handleAdminRequest).not.toHaveBeenCalled();
+  });
+
+  it("após abort, handleDecision(approve) é ignorado", async () => {
+    const deps = depsWith();
+    const { emit } = collector();
+    const session = new AiSession({ sessionId: "s1", emit, deps });
+    await session.start();
+    session.setProposedMapping(mapping);
+    session.abort("user");
+    await session.handleDecision({ sessionId: "s1", decision: "approve" });
+    expect(deps.applyApproval).not.toHaveBeenCalled();
   });
 
   it("approve chama applyApproval com mapping validado e transiciona para synced", async () => {

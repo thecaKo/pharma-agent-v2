@@ -118,7 +118,12 @@ export class AiSession {
     const candidate: MappingConfig = command.editedMapping ?? (this.proposedMapping as MappingConfig | undefined) ?? {};
     const validated = validateMappingConfig(candidate);
     this.transition("applying");
-    await this.deps.applyApproval(validated);
+    try {
+      await this.deps.applyApproval(validated);
+    } catch (err) {
+      this.fail(err instanceof Error ? err.message : "falha ao aplicar mapping");
+      return;
+    }
     this.audit({ kind: "mapping.decision", summary: "mapping aprovado e aplicado" });
     this.transition("synced");
   }
