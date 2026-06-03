@@ -30,8 +30,21 @@ import type {
   ConnectorDiscoveryMessage,
   ConnectorErrorPayload
 } from "../transport/protocol.js";
-import { buildAdminErrorResponseMessage, buildAdminSuccessResponseMessage, buildConnectorDiscoveryMessage } from "../transport/protocol.js";
-import { writeDatabaseConfig } from "../config/programdata-config.js";
+import {
+  buildAdminErrorResponseMessage,
+  buildAdminSuccessResponseMessage,
+  buildConnectorDiscoveryMessage,
+  buildProvisionReadonlyUserResult,
+  type ProvisionReadonlyUserMessage,
+  type ProvisionReadonlyUserResultMessage,
+  type ProvisionErrorCode
+} from "../transport/protocol.js";
+import {
+  writeDatabaseConfig,
+  writeReadonlyProvisioningConfig,
+  type ReadonlyProvisioningMetadata
+} from "../config/programdata-config.js";
+import { generateReadonlyPassword } from "../db/provision-password.js";
 import {
   buildSetupConfigFailureResult,
   buildSetupConfigSuccessResult,
@@ -109,6 +122,7 @@ export interface RuntimeTransport {
   on(event: "aiToolInvoke", listener: (command: ToolInvokeCommand) => void): this;
   on(event: "aiMappingDecision", listener: (command: MappingDecisionCommand) => void): this;
   on(event: "aiSessionAbort", listener: (command: AiSessionAbortCommand) => void): this;
+  on(event: "provisionReadonlyUser", listener: (message: ProvisionReadonlyUserMessage) => void): this;
   connect(): Promise<void>;
   close(): Promise<void>;
   isConnected(): boolean;
@@ -133,6 +147,7 @@ export interface RuntimeTransport {
   sendConnectorSetupConfigResult(message: ConnectorSetupConfigResultMessage): void;
   sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void;
   sendAiSessionMessage(message: AiSessionOutboundMessage): void;
+  sendProvisionReadonlyUserResult(message: ProvisionReadonlyUserResultMessage): void;
   getReconnectAttemptCount(): number;
 }
 
@@ -157,6 +172,11 @@ export interface ConnectorRuntimeOptions {
   now?: () => string;
   discoverDsns?: () => Promise<PostgresDsnCandidate[]>;
   discoveryTimeoutMs?: number;
+  createReadonlyAdapter?: (database: DatabaseConfig) => SourceDatabaseAdapter;
+  writeReadonlyProvisioningConfig?: (
+    programData: string | undefined,
+    input: { database: DatabaseConfig; readonlyProvisioning: ReadonlyProvisioningMetadata }
+  ) => Promise<void>;
 }
 
 export interface ConnectorRuntimeState {
@@ -218,6 +238,11 @@ export class ConnectorRuntime {
   private discoverySnapshotPromise?: Promise<PostgresDsnCandidate[]>;
   private hasEmittedDiscoverySnapshot = false;
   private readonly bootstrapState = new BootstrapState();
+  private readonly createReadonlyAdapterFn: (database: DatabaseConfig) => SourceDatabaseAdapter;
+  private readonly writeReadonlyProvisioningFn: (
+    programData: string | undefined,
+    input: { database: DatabaseConfig; readonlyProvisioning: ReadonlyProvisioningMetadata }
+  ) => Promise<void>;
 
   public constructor(options: ConnectorRuntimeOptions = {}) {
     this.env = options.env;
@@ -261,6 +286,16 @@ export class ConnectorRuntime {
     this.discoverDsnsFn =
       options.discoverDsns ?? (() => discoverPostgresDsns(createRegExeRegistryReader()));
     this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 3000;
+    this.createReadonlyAdapterFn =
+      options.createReadonlyAdapter ??
+      ((database) =>
+        createSourceDatabaseAdapter({
+          config: database,
+          dependencies: this.adapterDependencies,
+          secrets: runtimeConfigSecrets(this.config)
+        }));
+    this.writeReadonlyProvisioningFn =
+      options.writeReadonlyProvisioningConfig ?? writeReadonlyProvisioningConfig;
     this.bindTransportEvents();
   }
 
@@ -407,6 +442,11 @@ export class ConnectorRuntime {
     this.transport.on("bootstrapDbConfig", (message) => {
       this.applyBootstrapDbConfig(message).catch((error) =>
         this.handleRuntimeError("BOOTSTRAP_DB_CONFIG_FAILED", error)
+      );
+    });
+    this.transport.on("provisionReadonlyUser", (message) => {
+      this.handleProvisionReadonlyUser(message).catch((error) =>
+        this.handleRuntimeError("PROVISION_READONLY_FAILED", error)
       );
     });
 
@@ -906,6 +946,119 @@ export class ConnectorRuntime {
     await this.resumeSavedMappingIfAvailable();
   }
 
+  private async handleProvisionReadonlyUser(message: ProvisionReadonlyUserMessage): Promise<void> {
+    const database = this.config.database;
+    const engine = database?.driver ?? "unknown";
+    const respond = (
+      outcome: "provisioned" | "fallback_no_privilege" | "unsupported_engine" | "error",
+      errorCode?: ProvisionErrorCode
+    ): void => {
+      this.transport.sendProvisionReadonlyUserResult(
+        buildProvisionReadonlyUserResult(
+          {
+            requestId: message.requestId,
+            sessionId: message.sessionId,
+            outcome,
+            username: message.username,
+            ...(errorCode ? { errorCode } : {})
+          },
+          this.now()
+        )
+      );
+    };
+
+    if (!database) {
+      respond("error", "unknown");
+      return;
+    }
+
+    const password = generateReadonlyPassword();
+    const secrets = [...runtimeConfigSecrets(this.config), password];
+
+    let adminAdapter: SourceDatabaseAdapter;
+    try {
+      adminAdapter = await this.ensureAdapterConnected();
+    } catch {
+      respond("error", "unreachable");
+      return;
+    }
+
+    let provisionResult;
+    try {
+      provisionResult = await adminAdapter.provisionReadonlyUser({
+        username: message.username,
+        password
+      });
+    } catch (error) {
+      this.logger.warn("provision.readonly.failed", {
+        requestId: message.requestId,
+        message: redactString(error instanceof Error ? error.message : String(error), secrets)
+      });
+      await this.persistProvisioning(database, { status: "fallback_discovered", engine });
+      respond("error", classifyProvisionError(error));
+      return;
+    }
+
+    if (provisionResult.outcome === "fallback_no_privilege") {
+      await this.persistProvisioning(database, { status: "fallback_discovered", engine });
+      respond("fallback_no_privilege");
+      return;
+    }
+
+    // provisioned: monta credencial RO, valida com SELECT, troca a conexão ativa.
+    const roDatabase: DatabaseConfig = { ...database, user: message.username, password };
+    const roAdapter = this.createReadonlyAdapterFn(roDatabase);
+    try {
+      await roAdapter.connect();
+      await roAdapter.runReadOnlySelect({ sql: "select 1", limit: 1 });
+    } catch (error) {
+      await roAdapter.close().catch(() => undefined);
+      this.logger.warn("provision.readonly.validation_failed", {
+        requestId: message.requestId,
+        message: redactString(error instanceof Error ? error.message : String(error), secrets)
+      });
+      await this.persistProvisioning(database, { status: "fallback_discovered", engine });
+      respond("error", classifyProvisionError(error));
+      return;
+    }
+
+    const previousAdapter = this.adapter;
+    this.adapter = roAdapter;
+    this.adapterConnected = true;
+    this.config = { ...this.config, database: roDatabase };
+    if (previousAdapter && previousAdapter !== roAdapter) {
+      await previousAdapter.close().catch(() => undefined);
+    }
+
+    await this.persistProvisioning(roDatabase, {
+      status: "provisioned",
+      username: message.username,
+      engine
+    });
+    this.logger.info("provision.readonly.provisioned", {
+      requestId: message.requestId,
+      sessionId: message.sessionId,
+      engine
+    });
+    respond("provisioned");
+  }
+
+  private async persistProvisioning(
+    database: DatabaseConfig,
+    meta: { status: ReadonlyProvisioningMetadata["status"]; username?: string; engine: string }
+  ): Promise<void> {
+    const readonlyProvisioning: ReadonlyProvisioningMetadata = {
+      status: meta.status,
+      engine: meta.engine,
+      provisionedAt: this.now(),
+      ...(meta.username !== undefined ? { username: meta.username } : {})
+    };
+    await this.writeReadonlyProvisioningFn(this.configuredProgramDataPath(), {
+      database,
+      readonlyProvisioning
+    });
+  }
+
   private async handleFileDiscoveryScan(request: { correlationId: string; rootPath?: string }): Promise<void> {
     const correlationId = request.correlationId;
     const identity = this.activeStateIdentity();
@@ -1378,6 +1531,19 @@ function createOptionalDriverDependencies(): AdapterFactoryDependencies {
       };
     }
   };
+}
+
+function classifyProvisionError(error: unknown): ProvisionErrorCode {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code).toLowerCase()
+    : "";
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const haystack = `${code} ${message}`;
+  if (haystack.includes("timeout") || haystack.includes("timedout")) return "timeout";
+  if (haystack.includes("econnrefused") || haystack.includes("econnreset") || haystack.includes("unreachable") || haystack.includes("network")) return "unreachable";
+  if (haystack.includes("auth") || haystack.includes("denied") || haystack.includes("password")) return "auth";
+  if (haystack.includes("syntax")) return "syntax";
+  return "unknown";
 }
 
 function runtimeConfigSecrets(config: ConnectorRuntimeConfig): string[] {
