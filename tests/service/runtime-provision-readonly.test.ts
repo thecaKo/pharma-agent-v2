@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { ConnectorRuntime } from "../../src/service/runtime.js";
 import type { SourceDatabaseAdapter } from "../../src/db/source-adapter.js";
 import type { ProvisionReadonlyUserResultMessage } from "../../src/transport/protocol.js";
+import * as provisionPassword from "../../src/db/provision-password.js";
 
 class FakeTransport extends EventEmitter {
   public results: ProvisionReadonlyUserResultMessage[] = [];
@@ -134,5 +135,39 @@ describe("ConnectorRuntime provision readonly", () => {
     await vi.waitFor(() => expect(transport.results.length).toBe(1));
     expect(transport.results[0]!.outcome).toBe("error");
     expect(transport.results[0]!.errorCode).toBeDefined();
+  });
+
+  it("nunca expõe a senha gerada no result nem nos logs", async () => {
+    const KNOWN = "KNOWN-RO-PASSWORD-1234567890ABCD";
+    vi.spyOn(provisionPassword, "generateReadonlyPassword").mockReturnValue(KNOWN);
+
+    const transport = new FakeTransport();
+    const logger = {
+      info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+      child: vi.fn(() => logger)
+    };
+    const runtime = new ConnectorRuntime({
+      env,
+      transport: transport as never,
+      adapter: buildAdmin("provisioned"),
+      logger: logger as never,
+      now: () => "2026-06-03T00:00:00.000Z",
+      createReadonlyAdapter: () => buildAdmin("provisioned"),
+      writeReadonlyProvisioningConfig: vi.fn(async () => undefined)
+    } as never);
+    await runtime.start();
+
+    transport.emit("provisionReadonlyUser", {
+      type: "connector.provisionReadonlyUser", requestId: "req-9", sessionId: "sess-1", username: "pharma_connector_ro"
+    });
+    await vi.waitFor(() => expect(transport.results.length).toBe(1));
+
+    const serializedResult = JSON.stringify(transport.results[0]);
+    expect(serializedResult).not.toContain(KNOWN);
+
+    const allLogs = JSON.stringify([
+      ...logger.info.mock.calls, ...logger.warn.mock.calls, ...logger.error.mock.calls
+    ]);
+    expect(allLogs).not.toContain(KNOWN);
   });
 });
