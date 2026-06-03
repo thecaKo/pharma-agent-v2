@@ -2,6 +2,7 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult } from "./provision-types.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
@@ -178,6 +179,34 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
   public async sampleRows(_tableName: string, _limit: number): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
   public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
 
+  public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
+    const connection = this.requireConnection("provision");
+    const role = quotePgIdentifier(input.username);
+    const dbName = quotePgIdentifier(this.config.name);
+    const schema = "public";
+    const schemaIdent = quotePgIdentifier(schema);
+    try {
+      try {
+        await connection.query(`CREATE ROLE ${role} LOGIN PASSWORD $1`, [input.password]);
+      } catch (error) {
+        if (isPgRoleExistsError(error)) {
+          await connection.query(`ALTER ROLE ${role} WITH LOGIN PASSWORD $1`, [input.password]);
+        } else {
+          throw error;
+        }
+      }
+      await connection.query(`GRANT CONNECT ON DATABASE ${dbName} TO ${role}`, []);
+      await connection.query(`GRANT USAGE ON SCHEMA ${schemaIdent} TO ${role}`, []);
+      await connection.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schemaIdent} TO ${role}`, []);
+      return { outcome: "provisioned", grantedScope: "all_tables" };
+    } catch (error) {
+      if (isPgPrivilegeError(error)) {
+        return { outcome: "fallback_no_privilege", grantedScope: "all_tables" };
+      }
+      throw normalizeDatabaseError({ driver: "postgresql", operation: "provision", error, secrets: this.secrets });
+    }
+  }
+
   private requireConnection(operation: DatabaseOperation = "query"): PostgresDriverConnection {
     if (!this.connection) {
       throw normalizeDatabaseError({
@@ -297,4 +326,25 @@ function readNullable(value: unknown): boolean | undefined {
 
 function notSupported(op: string): Error {
   return new Error(`${op} is not supported for this driver`);
+}
+
+function quotePgIdentifier(name: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) {
+    throw new Error(`identificador inválido para Postgres: ${name}`);
+  }
+  return `"${name}"`;
+}
+
+function pgSqlState(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function isPgRoleExistsError(error: unknown): boolean {
+  return pgSqlState(error) === "42710";
+}
+
+function isPgPrivilegeError(error: unknown): boolean {
+  return pgSqlState(error) === "42501";
 }
