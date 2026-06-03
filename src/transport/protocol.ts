@@ -5,6 +5,7 @@ import { redactString } from "../logging/redact.js";
 import { normalizeCatalogConfigPushMessage } from "./catalog-config-push.js";
 import type { PostgresDsnCandidate } from "../db/dsn-discovery.js";
 import type { DatabaseDriver } from "../config/types.js";
+import { DATABASE_DRIVERS } from "../config/types.js";
 
 export type ServerMessageType =
   | "connector.config"
@@ -533,7 +534,7 @@ function parseAdminRequest(message: Record<string, unknown>): AdminRequestMessag
 function parseBootstrapDbConfig(message: Record<string, unknown>): BootstrapDbConfigMessage {
   const database = expectRecord(message.database, "database");
   const driver = expectString(database.driver, "database.driver");
-  if (!["mysql", "firebird", "postgresql", "mariadb", "sqlserver"].includes(driver)) {
+  if (!(DATABASE_DRIVERS as readonly string[]).includes(driver)) {
     throw new ProtocolParseError(`database.driver must be a supported driver, got ${driver}`);
   }
   const hasInstance = typeof database.instance === "string" && database.instance.length > 0;

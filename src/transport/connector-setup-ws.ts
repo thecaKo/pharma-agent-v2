@@ -1,4 +1,5 @@
 import type { DatabaseConfig, DatabaseDriver } from "../config/types.js";
+import { DATABASE_DRIVERS } from "../config/types.js";
 import { deriveMySqlDatabaseName } from "../cli/database-setup.js";
 import { ProtocolParseError } from "./protocol.js";
 
@@ -181,10 +182,12 @@ function parseSetupMethod(value: unknown): ConnectorSetupMethod {
 
 function parseDriver(value: unknown): DatabaseDriver {
   const driver = expectNonEmptyString(value, "driver");
-  if (driver !== "mysql" && driver !== "firebird") {
-    throw new ProtocolParseError('driver must be "mysql" or "firebird"');
+  if (!(DATABASE_DRIVERS as readonly string[]).includes(driver)) {
+    throw new ProtocolParseError(
+      `driver must be one of: ${DATABASE_DRIVERS.join(", ")}`
+    );
   }
-  return driver;
+  return driver as DatabaseDriver;
 }
 
 function parseJson(raw: string | Buffer | ArrayBuffer | Buffer[]): unknown {
