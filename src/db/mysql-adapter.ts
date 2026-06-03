@@ -4,6 +4,7 @@ import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { validateReadOnlySelect, ReadOnlySqlError } from "./readonly-sql.js";
 import type { ProvisionReadonlyUserInput, ProvisionReadonlyUserResult } from "./provision-types.js";
+import { validateReadonlyUsername } from "./provision-types.js";
 import type {
   DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput,
   QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter
@@ -226,6 +227,7 @@ export class MySqlSourceAdapter implements SourceDatabaseAdapter {
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
     const user = quoteMysqlIdentifier(input.username);
     const db = quoteMysqlIdentifier(this.config.name);
     try {

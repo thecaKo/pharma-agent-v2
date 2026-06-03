@@ -2,7 +2,8 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
-import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult } from "./provision-types.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
+import { ReadOnlySqlError } from "./readonly-sql.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
@@ -195,6 +196,7 @@ export class SqlServerSourceAdapter implements SourceDatabaseAdapter {
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
     const login = quoteSqlServerIdentifier(input.username);
     try {
       // CREATE/ALTER LOGIN via sp_executesql: identificador quotado por QUOTENAME,
@@ -331,7 +333,7 @@ function notSupported(op: string): Error {
 
 function quoteSqlServerIdentifier(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) {
-    throw new Error(`identificador inválido para SQL Server: ${name}`);
+    throw new ReadOnlySqlError(`identificador inválido para SQL Server: ${name}`);
   }
   return `[${name}]`;
 }

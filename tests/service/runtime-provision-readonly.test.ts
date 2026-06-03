@@ -111,6 +111,46 @@ describe("ConnectorRuntime provision readonly", () => {
     expect(transport.results[0]!.outcome).toBe("fallback_no_privilege");
     const persisted = (writeProvision.mock.calls[0]![1]) as { readonlyProvisioning: { status: string } };
     expect(persisted.readonlyProvisioning.status).toBe("fallback_discovered");
+    // A conexão admin (descoberta) não é trocada nem fechada no caminho de fallback.
+    expect(adminAdapter.close).not.toHaveBeenCalled();
+  });
+
+  it("validação RO falha após GRANT: responde erro, não troca a conexão e fecha o roAdapter", async () => {
+    const transport = new FakeTransport();
+    const adminAdapter = buildAdmin("provisioned");
+    const roAdapter = buildAdmin("provisioned");
+    // O provisionamento dá certo (provisioned), mas a validação RO (select 1) falha.
+    (roAdapter.runReadOnlySelect as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("login do usuário read-only recusado")
+    );
+    const writeProvision = vi.fn(async () => undefined);
+
+    const runtime = new ConnectorRuntime({
+      env,
+      transport: transport as never,
+      adapter: adminAdapter,
+      now: () => "2026-06-03T00:00:00.000Z",
+      createReadonlyAdapter: () => roAdapter,
+      writeReadonlyProvisioningConfig: writeProvision
+    } as never);
+    await runtime.start();
+
+    transport.emit("provisionReadonlyUser", {
+      type: "connector.provisionReadonlyUser", requestId: "req-ro-val", sessionId: "sess-1", username: "pharma_connector_ro"
+    });
+    await vi.waitFor(() => expect(transport.results.length).toBe(1));
+
+    // Responde erro (fallback para a credencial descoberta), não comuta para o RO.
+    expect(transport.results[0]!.outcome).toBe("error");
+    expect(adminAdapter.provisionReadonlyUser).toHaveBeenCalledTimes(1);
+    // O roAdapter foi aberto para validar e, ao falhar, é fechado.
+    expect(roAdapter.connect).toHaveBeenCalledTimes(1);
+    expect(roAdapter.close).toHaveBeenCalledTimes(1);
+    // A conexão admin permanece ativa: não é fechada.
+    expect(adminAdapter.close).not.toHaveBeenCalled();
+    // Persiste fallback_discovered (não provisioned).
+    const persisted = (writeProvision.mock.calls[0]![1]) as { readonlyProvisioning: { status: string } };
+    expect(persisted.readonlyProvisioning.status).toBe("fallback_discovered");
   });
 
   it("erro durante a provisão responde error e não troca a conexão", async () => {

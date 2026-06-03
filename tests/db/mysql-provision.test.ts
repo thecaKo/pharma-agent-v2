@@ -42,6 +42,11 @@ describe("MySqlSourceAdapter.provisionReadonlyUser", () => {
     // CREATE e ALTER recebem a senha como parâmetro posicional
     expect(calls[0]!.params).toContain("a-very-strong-password-1234");
     expect(calls[1]!.params).toContain("a-very-strong-password-1234");
+    // O GRANT SELECT é enviado e a senha NÃO aparece nem no SQL nem nos params do GRANT.
+    const grantCall = calls.find((c) => c.sql.includes("GRANT SELECT"));
+    expect(grantCall).toBeDefined();
+    expect(grantCall!.sql).not.toContain("a-very-strong-password-1234");
+    expect(grantCall!.params).not.toContain("a-very-strong-password-1234");
   });
 
   it("retorna fallback_no_privilege quando o GRANT falha por 1044/1142", async () => {

@@ -2,7 +2,8 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
-import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult } from "./provision-types.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
+import { ReadOnlySqlError } from "./readonly-sql.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
@@ -181,6 +182,7 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
     const role = quotePgIdentifier(input.username);
     const dbName = quotePgIdentifier(this.config.name);
     const schema = "public";
@@ -330,7 +332,7 @@ function notSupported(op: string): Error {
 
 function quotePgIdentifier(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) {
-    throw new Error(`identificador inválido para Postgres: ${name}`);
+    throw new ReadOnlySqlError(`identificador inválido para Postgres: ${name}`);
   }
   return `"${name}"`;
 }

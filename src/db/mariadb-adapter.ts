@@ -2,7 +2,8 @@ import type { DatabaseConfig } from "../config/types.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
-import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult } from "./provision-types.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
+import { ReadOnlySqlError } from "./readonly-sql.js";
 import type { DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput, QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter } from "./source-adapter.js";
 
 export interface MariaDbConnectionConfig {
@@ -167,6 +168,7 @@ export class MariaDbSourceAdapter implements SourceDatabaseAdapter {
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
     const user = quoteMariaDbIdentifier(input.username);
     const db = quoteMariaDbIdentifier(this.config.name);
     try {
@@ -326,7 +328,7 @@ function notSupported(op: string): Error {
 
 function quoteMariaDbIdentifier(name: string): string {
   if (!/^[A-Za-z0-9_$]+$/u.test(name)) {
-    throw new Error(`identificador inválido para MariaDB: ${name}`);
+    throw new ReadOnlySqlError(`identificador inválido para MariaDB: ${name}`);
   }
   return `\`${name}\``;
 }

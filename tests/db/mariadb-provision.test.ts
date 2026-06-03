@@ -36,6 +36,11 @@ describe("MariaDbSourceAdapter.provisionReadonlyUser", () => {
     expect(sqls[2]).toContain("GRANT SELECT ON");
     expect(sqls[3]).toContain("FLUSH PRIVILEGES");
     for (const c of calls) expect(c.sql).not.toContain("maria-strong-password-1234567");
+    // O GRANT SELECT é enviado e a senha NÃO aparece nem no SQL nem nos params do GRANT.
+    const grantCall = calls.find((c) => c.sql.includes("GRANT SELECT"));
+    expect(grantCall).toBeDefined();
+    expect(grantCall!.sql).not.toContain("maria-strong-password-1234567");
+    expect(grantCall!.params).not.toContain("maria-strong-password-1234567");
   });
 
   it("mapeia 1044/1142 para fallback_no_privilege", async () => {

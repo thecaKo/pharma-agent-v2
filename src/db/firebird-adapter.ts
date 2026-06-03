@@ -3,7 +3,7 @@ import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { validateReadOnlySelect, ReadOnlySqlError } from "./readonly-sql.js";
-import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult } from "./provision-types.js";
+import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
 import type {
   DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput,
   QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter
@@ -263,7 +263,12 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
+    validateReadonlyUsername(input.username);
     const user = quoteFirebirdIdentifier(input.username);
+
+    // Fase 1: cria/altera o usuário e lista as relações. Uma falha de privilégio
+    // aqui significa que nada foi provisionado → fallback seguro para a descoberta.
+    let tables: string[];
     try {
       await connection.query(`CREATE OR ALTER USER ${user} PASSWORD ?`, [input.password]);
       const rows = await connection.query(
@@ -271,17 +276,26 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
          WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL`,
         []
       );
-      const tables = extractFirebirdRelationNames(rows);
-      for (const table of tables) {
-        await connection.query(`GRANT SELECT ON ${quoteFirebirdIdentifier(table)} TO ${user}`, []);
-      }
-      return { outcome: "provisioned", grantedScope: "all_tables" };
+      tables = extractFirebirdRelationNames(rows);
     } catch (error) {
       if (isFirebirdPrivilegeError(error)) {
         return { outcome: "fallback_no_privilege", grantedScope: "all_tables" };
       }
       throw normalizeDatabaseError({ driver: "firebird", operation: "provision", error, secrets: this.secrets });
     }
+
+    // Fase 2: GRANT SELECT por tabela. Se QUALQUER grant falhar no meio do loop,
+    // ABORTA e propaga como erro — nunca como fallback_no_privilege. O usuário teria
+    // grants parciais; o runtime trata o erro revertendo para a credencial descoberta,
+    // garantindo que a conexão ativa nunca passe a um RO com permissões incompletas.
+    for (const table of tables) {
+      try {
+        await connection.query(`GRANT SELECT ON ${quoteFirebirdIdentifier(table)} TO ${user}`, []);
+      } catch (error) {
+        throw normalizeDatabaseError({ driver: "firebird", operation: "provision", error, secrets: this.secrets });
+      }
+    }
+    return { outcome: "provisioned", grantedScope: "all_tables" };
   }
 
   private requireConnection(operation: DatabaseOperation = "query"): FirebirdDriverConnection {

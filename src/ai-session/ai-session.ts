@@ -10,8 +10,7 @@ import {
   type MappingProposedMessage, type AiSessionStateMessage
 } from "./ai-protocol.js";
 import { buildToolCatalog, CATALOG_VERSION, toolNameToAdminCommand, PROPOSE_READONLY_USER_TOOL } from "./tool-catalog.js";
-
-const READONLY_USERNAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{2,62}$/;
+import { READONLY_USERNAME_PATTERN } from "../db/provision-types.js";
 
 export type AiSessionOutboundMessage =
   | AiCatalogMessage | ToolResultMessage | AuditEventMessage
