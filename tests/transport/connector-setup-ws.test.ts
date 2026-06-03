@@ -108,6 +108,55 @@ describe("connector-setup-ws", () => {
     });
   });
 
+  it("parses valid mariadb manual setup payload", () => {
+    const command = parseConnectorSetupConfigCommand(
+      JSON.stringify({
+        id: "setup-maria",
+        type: CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
+        setupMethod: "manual",
+        driver: "mariadb",
+        host: "192.168.20.103",
+        port: 3306,
+        database: "cliente_mock",
+        username: "agente",
+        password: "agente123"
+      })
+    );
+
+    expect(command).toMatchObject({
+      correlationId: "setup-maria",
+      setupMethod: "manual",
+      driver: "mariadb"
+    });
+
+    expect(setupConfigToDatabaseConfig(command)).toEqual({
+      driver: "mariadb",
+      host: "192.168.20.103",
+      port: 3306,
+      name: "cliente_mock",
+      user: "agente",
+      password: "agente123"
+    });
+  });
+
+  it("rejects payload with unsupported driver", () => {
+    expect(() =>
+      parseConnectorSetupConfigCommand(
+        JSON.stringify({
+          id: "setup-bad",
+          type: CONNECTOR_SETUP_CONFIG_COMMAND_TYPE,
+          setupMethod: "manual",
+          driver: "oracle",
+          host: "db.local",
+          port: 1521,
+          database: "pharma_db",
+          username: "app",
+          password: "secret"
+        })
+      )
+    ).toThrow('driver must be "mysql", "firebird", "postgresql", "mariadb", or "sqlserver"');
+  });
+
   it("rejects malformed payload missing driver", () => {
     expect(() =>
       parseConnectorSetupConfigCommand(

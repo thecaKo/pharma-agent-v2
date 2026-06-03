@@ -179,12 +179,22 @@ function parseSetupMethod(value: unknown): ConnectorSetupMethod {
   return method;
 }
 
+const SUPPORTED_DRIVERS: readonly DatabaseDriver[] = [
+  "mysql",
+  "firebird",
+  "postgresql",
+  "mariadb",
+  "sqlserver"
+];
+
 function parseDriver(value: unknown): DatabaseDriver {
   const driver = expectNonEmptyString(value, "driver");
-  if (driver !== "mysql" && driver !== "firebird") {
-    throw new ProtocolParseError('driver must be "mysql" or "firebird"');
+  if (!SUPPORTED_DRIVERS.includes(driver as DatabaseDriver)) {
+    throw new ProtocolParseError(
+      'driver must be "mysql", "firebird", "postgresql", "mariadb", or "sqlserver"'
+    );
   }
-  return driver;
+  return driver as DatabaseDriver;
 }
 
 function parseJson(raw: string | Buffer | ArrayBuffer | Buffer[]): unknown {
