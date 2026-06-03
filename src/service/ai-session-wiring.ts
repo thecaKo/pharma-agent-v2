@@ -42,6 +42,7 @@ export interface AiSessionDepsInput {
   programData: string | undefined;
   currentDatabase: () => DatabaseConfig | undefined;
   activateMapping: (mapping: ValidatedMappingConfig) => Promise<void>;
+  currentEngine: () => string;
 }
 
 export function buildAiSessionDeps(input: AiSessionDepsInput): AiSessionDeps {
@@ -49,6 +50,7 @@ export function buildAiSessionDeps(input: AiSessionDepsInput): AiSessionDeps {
     handleAdminRequest: (req) => input.handleAdminRequest(req as AdminRequestMessage),
     secrets: input.secrets,
     now: input.now,
+    currentEngine: input.currentEngine,
     applyApproval: async (mapping) => {
       const database = input.currentDatabase();
       if (database) {

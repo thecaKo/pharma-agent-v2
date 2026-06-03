@@ -420,6 +420,7 @@ export class ConnectorRuntime {
           writeDatabaseConfig,
           programData: this.configuredProgramDataPath(),
           currentDatabase: () => this.config.database,
+          currentEngine: () => this.config.database?.driver ?? "unknown",
           activateMapping: (mapping) =>
             this.activateMapping({
               connectorId: this.activeConnectorId ?? "ai-session",

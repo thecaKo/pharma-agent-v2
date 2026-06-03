@@ -9,7 +9,9 @@ import {
   type AiCatalogMessage, type ToolResultMessage, type AuditEventMessage,
   type MappingProposedMessage, type AiSessionStateMessage
 } from "./ai-protocol.js";
-import { buildToolCatalog, CATALOG_VERSION, toolNameToAdminCommand } from "./tool-catalog.js";
+import { buildToolCatalog, CATALOG_VERSION, toolNameToAdminCommand, PROPOSE_READONLY_USER_TOOL } from "./tool-catalog.js";
+
+const READONLY_USERNAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{2,62}$/;
 
 export type AiSessionOutboundMessage =
   | AiCatalogMessage | ToolResultMessage | AuditEventMessage
@@ -22,6 +24,7 @@ export interface AiSessionDeps {
   secrets: () => readonly string[];
   applyApproval: (mapping: ValidatedMappingConfig) => Promise<void>;
   now: () => string;
+  currentEngine: () => string;
 }
 
 export interface AiSessionOptions {
@@ -65,6 +68,11 @@ export class AiSession {
     const secrets = this.deps.secrets();
     this.audit({ kind: "tool.invoke", tool: command.name, summary: `invoca ${command.name}`, detail: redactValue(command.input, secrets) });
 
+    if (command.name === PROPOSE_READONLY_USER_TOOL) {
+      this.handleProposeReadonlyUser(command);
+      return;
+    }
+
     const adminCommand = toolNameToAdminCommand(command.name);
     if (!adminCommand) {
       this.emit(buildToolResultMessage(
@@ -92,6 +100,26 @@ export class AiSession {
       ));
       this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} falhou: ${response.error.errorCode}` });
     }
+  }
+
+  private handleProposeReadonlyUser(command: ToolInvokeCommand): void {
+    const input = (command.input ?? {}) as { username?: unknown };
+    const username = typeof input.username === "string" ? input.username : "";
+    if (!READONLY_USERNAME_PATTERN.test(username)) {
+      this.emit(buildToolResultMessage(
+        { sessionId: this.sessionId, invocationId: command.invocationId, ok: false, errorCode: "INVALID_INPUT" },
+        this.deps.now()
+      ));
+      this.audit({ kind: "tool.result", tool: command.name, summary: `username inválido para usuário read-only` });
+      return;
+    }
+    const engine = this.deps.currentEngine();
+    const payload = { accepted: true, username, engine };
+    this.emit(buildToolResultMessage(
+      { sessionId: this.sessionId, invocationId: command.invocationId, ok: true, payload },
+      this.deps.now()
+    ));
+    this.audit({ kind: "tool.result", tool: command.name, summary: `proposta de usuário read-only ${username} (${engine})`, detail: payload });
   }
 
   public proposeMapping(input: { mapping: ValidatedMappingConfig; rationale: string; previewRows: unknown[] }): void {
