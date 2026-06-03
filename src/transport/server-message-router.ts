@@ -29,7 +29,8 @@ export const CORE_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set
   "batch.ack",
   "config.updated",
   "admin.request",
-  "connector.bootstrap.dbConfig"
+  "connector.bootstrap.dbConfig",
+  "connector.provisionReadonlyUser"
 ]);
 
 export const DOCUMENTED_EXTENSION_MESSAGE_TYPES: ReadonlySet<string> = new Set([

@@ -5,6 +5,7 @@ import {
   ProtocolParseError,
   type ProvisionReadonlyUserMessage
 } from "../../src/transport/protocol.js";
+import { isCoreServerMessageType } from "../../src/transport/server-message-router.js";
 
 describe("connector.provisionReadonlyUser protocol", () => {
   it("faz parse do comando neo→agente (sem senha)", () => {
@@ -48,5 +49,11 @@ describe("connector.provisionReadonlyUser protocol", () => {
     });
     expect(result.outcome).toBe("error");
     expect(result.errorCode).toBe("timeout");
+  });
+});
+
+describe("connector.provisionReadonlyUser routing", () => {
+  it("é classificado como core", () => {
+    expect(isCoreServerMessageType("connector.provisionReadonlyUser")).toBe(true);
   });
 });

@@ -23,6 +23,8 @@ import {
   type ConnectorConfigMessage,
   type ConnectorDiscoveryMessage,
   type ConnectorErrorPayload,
+  type ProvisionReadonlyUserMessage,
+  type ProvisionReadonlyUserResultMessage,
   type ServerMessage
 } from "./protocol.js";
 import {
@@ -115,6 +117,7 @@ export type WebSocketTransportEvent =
   | "fileDiscoveryScanRequest"
   | "setupConfigRequest"
   | "bootstrapDbConfig"
+  | "provisionReadonlyUser"
   | "aiSessionStart"
   | "aiToolInvoke"
   | "aiMappingDecision"
@@ -182,6 +185,10 @@ export class WebSocketTransportClient extends EventEmitter {
   ): this;
   public override on(event: "setupConfigRequest", listener: (request: ConnectorSetupConfigCommand) => void): this;
   public override on(event: "bootstrapDbConfig", listener: (message: BootstrapDbConfigMessage) => void): this;
+  public override on(
+    event: "provisionReadonlyUser",
+    listener: (message: ProvisionReadonlyUserMessage) => void
+  ): this;
   public override on(event: "aiSessionStart", listener: (command: AiSessionStartCommand) => void): this;
   public override on(event: "aiToolInvoke", listener: (command: ToolInvokeCommand) => void): this;
   public override on(event: "aiMappingDecision", listener: (command: MappingDecisionCommand) => void): this;
@@ -312,6 +319,16 @@ export class WebSocketTransportClient extends EventEmitter {
 
   public sendConnectorDiscovery(message: ConnectorDiscoveryMessage): void {
     this.send(message);
+  }
+
+  public sendProvisionReadonlyUserResult(message: ProvisionReadonlyUserResultMessage): void {
+    this.send(message);
+    this.logger.info("provision.readonly.result_sent", {
+      requestId: message.requestId,
+      sessionId: message.sessionId,
+      outcome: message.outcome,
+      ...(message.errorCode ? { errorCode: message.errorCode } : {})
+    });
   }
 
   public sendAiSessionMessage(message: AiSessionOutboundMessage): void {
@@ -454,6 +471,13 @@ export class WebSocketTransportClient extends EventEmitter {
           dbDriver: message.database.driver
         });
         this.emit("bootstrapDbConfig", message);
+        return;
+      case "connector.provisionReadonlyUser":
+        this.logger.info("provision.readonly.received", {
+          requestId: message.requestId,
+          sessionId: message.sessionId
+        });
+        this.emit("provisionReadonlyUser", message);
         return;
     }
   }
