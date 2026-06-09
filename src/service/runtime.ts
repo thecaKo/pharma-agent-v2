@@ -222,6 +222,7 @@ export class ConnectorRuntime {
   private activeConnectorId?: string;
   private activeCustomerId?: string;
   private aiSessionManager?: AiSessionManager;
+  private aiSessionPreviousMapping?: ValidatedMappingConfig;
   private inFlightBatch?: ProductChangeBatch;
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
@@ -467,7 +468,13 @@ export class ConnectorRuntime {
               customerId: this.activeCustomerId ?? "ai-session",
               mapping
             })
-        })
+        }),
+      onSessionStart: () => this.pauseForAiSession(),
+      onSessionEnded: ({ applied }) => {
+        if (!applied) {
+          this.resumePollingAfterAiSession();
+        }
+      }
     });
     this.aiSessionManager = manager;
     this.transport.on("aiSessionStart", (command) => {
@@ -1199,6 +1206,27 @@ export class ConnectorRuntime {
       });
 
     await this.pendingPoll;
+  }
+
+  private pauseForAiSession(): void {
+    this.aiSessionPreviousMapping = this.activeMapping;
+    this.pausePolling("ai session active");
+  }
+
+  private resumePollingAfterAiSession(): void {
+    const previousMapping = this.aiSessionPreviousMapping;
+    this.aiSessionPreviousMapping = undefined;
+    // Se a própria sessão aplicou um novo mapping, activateMapping já reativou
+    // o poller; nada a fazer. Caso contrário, retoma o mapping anterior.
+    if (this.activeMapping !== previousMapping || !this.poller) {
+      return;
+    }
+    this.pollingPaused = false;
+    this.logger.info("polling.resumed", {
+      reason: "ai session ended without applying mapping",
+      mappingVersion: this.activeMapping?.mappingVersion
+    });
+    this.scheduleNextPoll(0);
   }
 
   private pausePolling(reason: string): void {

@@ -67,6 +67,80 @@ describe("AiSessionManager", () => {
     expect(sent.filter((m) => m.type === "tool.result")).toHaveLength(0);
   });
 
+  it("onStart dispara onSessionStart (pausa o poller)", async () => {
+    const sent: any[] = [];
+    const onSessionStart = vi.fn();
+    const manager = new AiSessionManager({
+      emit: (msg) => sent.push(msg),
+      buildDeps: () => ({
+        handleAdminRequest: async (req) => buildAdminSuccessResponseMessage({ requestId: req.requestId, command: req.command, payload: {} }),
+        secrets: () => [],
+        now: () => "t",
+        applyApproval: vi.fn(async () => undefined)
+      }),
+      onSessionStart
+    });
+    await manager.onStart({ sessionId: "s1" });
+    expect(onSessionStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("abort dispara onSessionEnded com applied=false (retoma o poller)", async () => {
+    const sent: any[] = [];
+    const onSessionEnded = vi.fn();
+    const manager = new AiSessionManager({
+      emit: (msg) => sent.push(msg),
+      buildDeps: () => ({
+        handleAdminRequest: async (req) => buildAdminSuccessResponseMessage({ requestId: req.requestId, command: req.command, payload: {} }),
+        secrets: () => [],
+        now: () => "t",
+        applyApproval: vi.fn(async () => undefined)
+      }),
+      onSessionEnded
+    });
+    await manager.onStart({ sessionId: "s1" });
+    manager.onAbort({ sessionId: "s1", reason: "user" });
+    expect(onSessionEnded).toHaveBeenCalledTimes(1);
+    expect(onSessionEnded).toHaveBeenCalledWith({ sessionId: "s1", applied: false });
+  });
+
+  it("synced dispara onSessionEnded com applied=true (não retoma o mapping anterior)", async () => {
+    const sent: any[] = [];
+    const onSessionEnded = vi.fn();
+    const manager = new AiSessionManager({
+      emit: (msg) => sent.push(msg),
+      buildDeps: () => ({
+        handleAdminRequest: async (req) => buildAdminSuccessResponseMessage({ requestId: req.requestId, command: req.command, payload: {} }),
+        secrets: () => [],
+        now: () => "t",
+        applyApproval: vi.fn(async () => undefined)
+      }),
+      onSessionEnded
+    });
+    await manager.onStart({ sessionId: "s1" });
+    await manager.onDecision({ sessionId: "s1", decision: "approve", editedMapping: validMapping });
+    expect(onSessionEnded).toHaveBeenCalledTimes(1);
+    expect(onSessionEnded).toHaveBeenCalledWith({ sessionId: "s1", applied: true });
+  });
+
+  it("falha (applyApproval lança) dispara onSessionEnded com applied=false", async () => {
+    const sent: any[] = [];
+    const onSessionEnded = vi.fn();
+    const manager = new AiSessionManager({
+      emit: (msg) => sent.push(msg),
+      buildDeps: () => ({
+        handleAdminRequest: async (req) => buildAdminSuccessResponseMessage({ requestId: req.requestId, command: req.command, payload: {} }),
+        secrets: () => [],
+        now: () => "t",
+        applyApproval: vi.fn(async () => { throw new Error("boom"); })
+      }),
+      onSessionEnded
+    });
+    await manager.onStart({ sessionId: "s1" });
+    await manager.onDecision({ sessionId: "s1", decision: "approve", editedMapping: validMapping });
+    expect(onSessionEnded).toHaveBeenCalledTimes(1);
+    expect(onSessionEnded).toHaveBeenCalledWith({ sessionId: "s1", applied: false });
+  });
+
   it("após failed a sessão é removida do Map (não roteia mais comandos)", async () => {
     const sent: any[] = [];
     const failingApproval = vi.fn(async () => { throw new Error("boom"); });

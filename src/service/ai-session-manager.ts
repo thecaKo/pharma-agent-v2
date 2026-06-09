@@ -7,12 +7,22 @@ import type {
 export interface AiSessionManagerOptions {
   emit: AiSessionEmit;
   buildDeps: (sessionId: string) => AiSessionDeps;
+  /** Disparado ao iniciar uma sessão de IA (ex.: pausar o poller). */
+  onSessionStart?: (info: { sessionId: string }) => void;
+  /**
+   * Disparado quando a sessão atinge um estado terminal
+   * (synced/failed/aborted). `applied` indica se o mapping da sessão foi
+   * efetivamente aplicado (synced) — nesse caso o poller já foi reativado com
+   * o novo mapping e não deve ser retomado com o anterior.
+   */
+  onSessionEnded?: (info: { sessionId: string; applied: boolean }) => void;
 }
 
 const TERMINAL_PHASES: ReadonlySet<AiSessionPhase> = new Set(["synced", "failed", "aborted"]);
 
 export class AiSessionManager {
   private readonly sessions = new Map<string, AiSession>();
+  private readonly endedSessions = new Set<string>();
   private readonly options: AiSessionManagerOptions;
 
   public constructor(options: AiSessionManagerOptions) {
@@ -28,6 +38,8 @@ export class AiSessionManager {
       deps: this.options.buildDeps(command.sessionId)
     });
     this.sessions.set(command.sessionId, session);
+    this.endedSessions.delete(command.sessionId);
+    this.options.onSessionStart?.({ sessionId: command.sessionId });
     await session.start();
   }
 
@@ -58,6 +70,13 @@ export class AiSessionManager {
         TERMINAL_PHASES.has(message.phase)
       ) {
         this.sessions.delete(sessionId);
+        if (!this.endedSessions.has(sessionId)) {
+          this.endedSessions.add(sessionId);
+          this.options.onSessionEnded?.({
+            sessionId,
+            applied: message.phase === "synced"
+          });
+        }
       }
     };
   }
