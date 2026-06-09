@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildToolCatalog, CATALOG_VERSION, TOOL_NAMES, toolNameToAdminCommand } from "../../src/ai-session/tool-catalog.js";
 
 describe("tool-catalog", () => {
-  it("declara as 14 ferramentas canônicas mais o sinal propose_readonly_user", () => {
+  it("declara as 14 ferramentas canônicas mais os sinais (propose_readonly_user + connection.*)", () => {
     expect([...TOOL_NAMES].sort()).toEqual([
+      "connection.discoverCandidates",
+      "connection.use",
       "fs.readConfigFile",
       "probe.connections",
       "probe.engines",
@@ -24,7 +26,7 @@ describe("tool-catalog", () => {
 
   it("buildToolCatalog devolve um ToolDescriptor por ferramenta", () => {
     const tools = buildToolCatalog();
-    expect(tools).toHaveLength(15);
+    expect(tools).toHaveLength(17);
     for (const tool of tools) {
       expect(tool.name).toBeTypeOf("string");
       expect(tool.description.length).toBeGreaterThan(0);
@@ -41,6 +43,17 @@ describe("tool-catalog", () => {
     expect(toolNameToAdminCommand("schema.listTables")).toBe("schema.listTables");
     expect(toolNameToAdminCommand("sql.runReadOnlySelect")).toBe("sql.runReadOnlySelect");
     expect(toolNameToAdminCommand("desconhecida")).toBeUndefined();
+  });
+});
+
+describe("connection.* no catálogo", () => {
+  it("connection.discoverCandidates e connection.use são sinais sem comando admin", () => {
+    const catalog = buildToolCatalog();
+    expect(catalog.find((t) => t.name === "connection.discoverCandidates")).toBeDefined();
+    const useTool = catalog.find((t) => t.name === "connection.use");
+    expect(useTool!.inputSchema).toMatchObject({ type: "object", required: ["handle"] });
+    expect(toolNameToAdminCommand("connection.discoverCandidates")).toBeUndefined();
+    expect(toolNameToAdminCommand("connection.use")).toBeUndefined();
   });
 });
 

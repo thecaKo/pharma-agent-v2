@@ -87,6 +87,8 @@ import { nodeFileSystemReader } from "../discovery/fs-reader.js";
 import { probeProcesses } from "../discovery/processes.js";
 import { probeConnections } from "../discovery/connections.js";
 import { probeScanConfigDirs } from "../discovery/scan-config-dirs.js";
+import { discoverConnectionCandidates, type DiscoveredConnection } from "../discovery/connection-candidates.js";
+import { readConfigFile } from "../discovery/read-config-file.js";
 import { listWindowsProcesses } from "../discovery/process-list.js";
 import { listWindowsConnections } from "../discovery/connection-list.js";
 import type { ProbeContext } from "../discovery/types.js";
@@ -172,6 +174,8 @@ export interface ConnectorRuntimeOptions {
   now?: () => string;
   discoverDsns?: () => Promise<PostgresDsnCandidate[]>;
   discoveryTimeoutMs?: number;
+  /** Override (testes) da descoberta de conexões candidatas para `connection.discoverCandidates`. */
+  discoverConnections?: () => Promise<DiscoveredConnection[]>;
   createReadonlyAdapter?: (database: DatabaseConfig) => SourceDatabaseAdapter;
   writeReadonlyProvisioningConfig?: (
     programData: string | undefined,
@@ -223,6 +227,13 @@ export class ConnectorRuntime {
   private activeCustomerId?: string;
   private aiSessionManager?: AiSessionManager;
   private aiSessionPreviousMapping?: ValidatedMappingConfig;
+  /**
+   * Adapter estabelecido EM MEMÓRIA por `connection.use` durante uma sessão de
+   * IA. Quando definido, é a conexão ativa das tools de schema (tem precedência
+   * sobre `this.adapter`). NÃO persiste em disco; é descartado ao fim/abort da
+   * sessão (ver onSessionEnded).
+   */
+  private aiSessionAdapter?: SourceDatabaseAdapter;
   private inFlightBatch?: ProductChangeBatch;
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
@@ -235,6 +246,7 @@ export class ConnectorRuntime {
   private adapterConnected = false;
   private lastErrorCode: string | undefined;
   private readonly discoverDsnsFn: () => Promise<PostgresDsnCandidate[]>;
+  private readonly discoverConnectionsFn?: () => Promise<DiscoveredConnection[]>;
   private readonly discoveryTimeoutMs: number;
   private discoverySnapshotPromise?: Promise<PostgresDsnCandidate[]>;
   private hasEmittedDiscoverySnapshot = false;
@@ -286,6 +298,7 @@ export class ConnectorRuntime {
     this.now = options.now ?? (() => new Date().toISOString());
     this.discoverDsnsFn =
       options.discoverDsns ?? (() => discoverPostgresDsns(createRegExeRegistryReader()));
+    this.discoverConnectionsFn = options.discoverConnections;
     this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 3000;
     this.createReadonlyAdapterFn =
       options.createReadonlyAdapter ??
@@ -368,6 +381,7 @@ export class ConnectorRuntime {
     await this.pendingPoll?.catch(() => undefined);
     await this.pendingStateWrite;
     await this.transport.close();
+    await this.discardAiSessionAdapter();
     if (this.adapterConnected && this.adapter) {
       await this.adapter.close();
       this.adapterConnected = false;
@@ -463,6 +477,8 @@ export class ConnectorRuntime {
           currentDatabase: () => this.config.database,
           currentEngine: () => this.config.database?.driver ?? "unknown",
           logger: this.logger,
+          discoverConnections: () => this.discoverAiSessionConnections(),
+          useConnection: (config) => this.useDiscoveredConnection(config),
           activateMapping: (mapping) =>
             this.activateMapping({
               connectorId: this.activeConnectorId ?? "ai-session",
@@ -472,6 +488,7 @@ export class ConnectorRuntime {
         }),
       onSessionStart: () => this.pauseForAiSession(),
       onSessionEnded: ({ applied }) => {
+        void this.discardAiSessionAdapter();
         if (!applied) {
           this.resumePollingAfterAiSession();
         }
@@ -798,11 +815,92 @@ export class ConnectorRuntime {
 
   private buildFullAdminRouterDeps(): AdminRouterDependencies {
     return buildRuntimeAdminDeps({
-      getAdapter: () => this.ensureAdapterConnected(),
+      // Se a sessão de IA estabeleceu uma conexão via connection.use, ela tem
+      // precedência: as tools de schema operam nela (em memória).
+      getAdapter: () => (this.aiSessionAdapter ? Promise.resolve(this.aiSessionAdapter) : this.ensureAdapterConnected()),
       fs: nodeFileSystemReader,
       registry: createRegExeRegistryReader(),
       probeDeps: this.buildAdminRouterDeps()
     });
+  }
+
+  /**
+   * Implementação de `connection.discoverCandidates`: varre dirs de config →
+   * lê arquivos → parser de credenciais; + enumera DSNs ODBC. Devolve as configs
+   * completas (com senha — ficam no store local da AiSession) e os descritores
+   * redigidos.
+   */
+  private async discoverAiSessionConnections(): Promise<DiscoveredConnection[]> {
+    if (this.discoverConnectionsFn) return this.discoverConnectionsFn();
+    const registry = createRegExeRegistryReader();
+    return discoverConnectionCandidates({
+      scanConfigDirs: (input) => probeScanConfigDirs({ fs: nodeFileSystemReader }, input),
+      readConfigFile: (input) => readConfigFile({ fs: nodeFileSystemReader }, input),
+      probeOdbcDsns: () => probeOdbcDsns(registry)
+    });
+  }
+
+  /**
+   * Implementação de `connection.use`: cria um adapter read-only a partir da
+   * config COMPLETA do handle (escolhido localmente), conecta, define-o como a
+   * conexão ativa das tools de schema e confirma com listTables. Não persiste.
+   */
+  private async useDiscoveredConnection(
+    config: DatabaseConfig
+  ): Promise<{ ok: boolean; tablesCount?: number; errorCode?: string }> {
+    const secrets = [...runtimeConfigSecrets(this.config), config.password].filter(
+      (v): v is string => typeof v === "string" && v.length > 0
+    );
+    let adapter: SourceDatabaseAdapter;
+    try {
+      adapter = createSourceDatabaseAdapter({
+        config,
+        dependencies: this.adapterDependencies,
+        secrets
+      });
+    } catch (error) {
+      this.logger.warn("connection.use.unsupported_driver", {
+        dbDriver: config.driver,
+        message: redactString(error instanceof Error ? error.message : String(error), secrets)
+      });
+      return { ok: false, errorCode: "UNSUPPORTED_DRIVER" };
+    }
+    try {
+      await adapter.connect();
+      const tables = await adapter.listTables();
+      const previous = this.aiSessionAdapter;
+      this.aiSessionAdapter = adapter;
+      if (previous && previous !== adapter) {
+        await previous.close().catch(() => undefined);
+      }
+      this.logger.info("connection.use.connected", {
+        dbDriver: config.driver,
+        dbHost: config.host,
+        dbPort: config.port,
+        dbName: config.name,
+        dbUser: config.user,
+        tablesCount: tables.length
+      });
+      return { ok: true, tablesCount: tables.length };
+    } catch (error) {
+      await adapter.close().catch(() => undefined);
+      const message = redactString(error instanceof Error ? error.message : String(error), secrets);
+      this.logger.warn("connection.use.failed", { dbDriver: config.driver, message });
+      return { ok: false, errorCode: "CONNECTION_FAILED" };
+    }
+  }
+
+  /**
+   * Descarta o adapter de sessão de IA estabelecido por connection.use (fim ou
+   * abort da sessão). A5: o store de credenciais vive na AiSession e some com
+   * ela; aqui só fechamos a conexão em memória.
+   */
+  private async discardAiSessionAdapter(): Promise<void> {
+    const adapter = this.aiSessionAdapter;
+    this.aiSessionAdapter = undefined;
+    if (adapter) {
+      await adapter.close().catch(() => undefined);
+    }
   }
 
   private async handleSetupConfig(request: ConnectorSetupConfigCommand): Promise<void> {

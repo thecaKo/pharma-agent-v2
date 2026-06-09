@@ -32,6 +32,22 @@ const SPECS: ToolSpec[] = [
 ];
 
 export const PROPOSE_READONLY_USER_TOOL = "propose_readonly_user";
+export const CONNECTION_DISCOVER_TOOL = "connection.discoverCandidates";
+export const CONNECTION_USE_TOOL = "connection.use";
+
+const CANDIDATE_DESCRIPTOR_SCHEMA = {
+  type: "object",
+  properties: {
+    handle: { type: "string" },
+    driver: { type: "string" },
+    host: { type: "string" },
+    port: { type: "integer" },
+    user: { type: "string" },
+    database: { type: "string" },
+    source: { type: "string" },
+    label: { type: "string" }
+  }
+} as const;
 
 const SIGNAL_DESCRIPTORS: ToolDescriptor[] = [
   {
@@ -46,6 +62,30 @@ const SIGNAL_DESCRIPTORS: ToolDescriptor[] = [
     outputSchema: {
       type: "object",
       properties: { accepted: { type: "boolean" }, username: { type: "string" }, engine: { type: "string" } }
+    }
+  },
+  {
+    name: CONNECTION_DISCOVER_TOOL,
+    description:
+      "Descobre conexões candidatas (arquivos de config + DSNs ODBC) na máquina e devolve descritores REDIGIDOS (sem senha) com um handle por conexão. A credencial completa fica local no agente.",
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: {
+      type: "object",
+      properties: { candidates: { type: "array", items: CANDIDATE_DESCRIPTOR_SCHEMA } }
+    }
+  },
+  {
+    name: CONNECTION_USE_TOOL,
+    description:
+      "Estabelece (read-only) a conexão escolhida pelo handle e a torna a conexão ativa das tools de schema. Recebe SÓ o handle — a senha nunca trafega.",
+    inputSchema: {
+      type: "object",
+      required: ["handle"],
+      properties: { handle: { type: "string" } }
+    },
+    outputSchema: {
+      type: "object",
+      properties: { ok: { type: "boolean" }, tablesCount: { type: "integer" }, errorCode: { type: "string" } }
     }
   }
 ];

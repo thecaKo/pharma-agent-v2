@@ -10,8 +10,13 @@ import {
   type AiCatalogMessage, type ToolResultMessage, type AuditEventMessage,
   type MappingProposedMessage, type AiSessionStateMessage
 } from "./ai-protocol.js";
-import { buildToolCatalog, CATALOG_VERSION, toolNameToAdminCommand, PROPOSE_READONLY_USER_TOOL } from "./tool-catalog.js";
+import {
+  buildToolCatalog, CATALOG_VERSION, toolNameToAdminCommand,
+  PROPOSE_READONLY_USER_TOOL, CONNECTION_DISCOVER_TOOL, CONNECTION_USE_TOOL
+} from "./tool-catalog.js";
 import { READONLY_USERNAME_PATTERN } from "../db/provision-types.js";
+import type { DatabaseConfig } from "../config/types.js";
+import type { DiscoveredConnection } from "../discovery/connection-candidates.js";
 
 const AI_TOOL_EXEC_TIMEOUT_MS = 25000;
 
@@ -29,6 +34,18 @@ export interface AiSessionDeps {
   applyApproval: (mapping: ValidatedMappingConfig) => Promise<void>;
   now: () => string;
   currentEngine: () => string;
+  /**
+   * Descobre conexões candidatas (configs + DSNs ODBC). Devolve, para cada uma,
+   * a config COMPLETA (com senha — fica no store local da sessão) e o descritor
+   * REDIGIDO. Opcional: ausente em sessões legadas/sem suporte a conexão.
+   */
+  discoverConnections?: () => Promise<DiscoveredConnection[]>;
+  /**
+   * Estabelece (read-only) a conexão escolhida a partir da config COMPLETA e a
+   * torna a conexão ativa das tools de schema. Recebe SÓ a config (a senha nunca
+   * trafega pelo handle). Retorna o resultado redigido { ok, tablesCount?, errorCode? }.
+   */
+  useConnection?: (config: DatabaseConfig) => Promise<{ ok: boolean; tablesCount?: number; errorCode?: string }>;
   /**
    * Logger opcional para observabilidade no STDOUT do agente. Não altera
    * comportamento — só emite logs (já redigidos) dos eventos do ciclo da sessão.
@@ -93,6 +110,12 @@ export class AiSession {
   private readonly seenInvocations = new Set<string>();
   private seq = 0;
   private proposedMapping?: ValidatedMappingConfig;
+  /**
+   * Store de credenciais COMPLETAS por sessão (handle → config com senha). Vive
+   * só na instância da AiSession; é descartado quando a sessão termina/aborta
+   * (a instância é removida do manager). NUNCA persiste em disco nem sai daqui.
+   */
+  private readonly connectionStore = new Map<string, DatabaseConfig>();
 
   public constructor(options: AiSessionOptions) {
     this.sessionId = options.sessionId;
@@ -141,6 +164,16 @@ export class AiSession {
 
     if (command.name === PROPOSE_READONLY_USER_TOOL) {
       this.handleProposeReadonlyUser(command);
+      return;
+    }
+
+    if (command.name === CONNECTION_DISCOVER_TOOL) {
+      await this.handleDiscoverCandidates(command);
+      return;
+    }
+
+    if (command.name === CONNECTION_USE_TOOL) {
+      await this.handleUseConnection(command);
       return;
     }
 
@@ -224,6 +257,77 @@ export class AiSession {
     this.logToolResult(command.invocationId, command.name, true, {
       payload: summarizeToolPayload(redactValue(payload, this.deps.secrets()))
     });
+  }
+
+  private emitToolResult(invocationId: string, name: string, ok: boolean, extra: { payload?: unknown; errorCode?: string }): void {
+    this.emit(buildToolResultMessage(
+      { sessionId: this.sessionId, invocationId, ok, ...(extra.payload !== undefined ? { payload: extra.payload } : {}), ...(extra.errorCode !== undefined ? { errorCode: extra.errorCode } : {}) },
+      this.deps.now()
+    ));
+  }
+
+  private async handleDiscoverCandidates(command: ToolInvokeCommand): Promise<void> {
+    const discover = this.deps.discoverConnections;
+    if (!discover) {
+      this.emitToolResult(command.invocationId, command.name, false, { errorCode: "INVALID_INPUT" });
+      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} indisponível` });
+      this.logToolResult(command.invocationId, command.name, false, { errorCode: "INVALID_INPUT" });
+      return;
+    }
+    let discovered: DiscoveredConnection[];
+    try {
+      discovered = await discover();
+    } catch (err) {
+      this.emitToolResult(command.invocationId, command.name, false, { errorCode: "INTERNAL_ERROR" });
+      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} erro interno: ${err instanceof Error ? err.message : String(err)}` });
+      this.logToolResult(command.invocationId, command.name, false, { errorCode: "INTERNAL_ERROR" });
+      return;
+    }
+    // Repopula o store local com as credenciais COMPLETAS por handle e devolve
+    // SÓ os descritores redigidos (sem senha).
+    this.connectionStore.clear();
+    const candidates = discovered.map((d) => {
+      this.connectionStore.set(d.handle, d.config);
+      return d.descriptor;
+    });
+    const payload = { candidates };
+    this.emitToolResult(command.invocationId, command.name, true, { payload });
+    this.audit({ kind: "tool.result", tool: command.name, summary: `${candidates.length} conexão(ões) candidata(s)`, detail: payload });
+    this.logToolResult(command.invocationId, command.name, true, { payload: { candidatesCount: candidates.length } });
+  }
+
+  private async handleUseConnection(command: ToolInvokeCommand): Promise<void> {
+    const input = (command.input ?? {}) as { handle?: unknown };
+    const handle = typeof input.handle === "string" ? input.handle : "";
+    const useConnection = this.deps.useConnection;
+    if (handle.length === 0 || !useConnection) {
+      this.emitToolResult(command.invocationId, command.name, false, { errorCode: "INVALID_INPUT" });
+      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name}: handle ausente/indisponível` });
+      this.logToolResult(command.invocationId, command.name, false, { errorCode: "INVALID_INPUT" });
+      return;
+    }
+    const config = this.connectionStore.get(handle);
+    if (!config) {
+      const payload = { ok: false, errorCode: "UNKNOWN_HANDLE" };
+      this.emitToolResult(command.invocationId, command.name, true, { payload });
+      this.audit({ kind: "tool.result", tool: command.name, summary: `handle desconhecido: ${handle}`, detail: payload });
+      this.logToolResult(command.invocationId, command.name, true, { payload });
+      return;
+    }
+    let result: { ok: boolean; tablesCount?: number; errorCode?: string };
+    try {
+      result = await useConnection(config);
+    } catch (err) {
+      const payload = { ok: false, errorCode: "CONNECTION_FAILED" };
+      this.emitToolResult(command.invocationId, command.name, true, { payload });
+      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} erro: ${err instanceof Error ? err.message : String(err)}`, detail: payload });
+      this.logToolResult(command.invocationId, command.name, true, { payload });
+      return;
+    }
+    const safe = redactValue(result, this.deps.secrets());
+    this.emitToolResult(command.invocationId, command.name, true, { payload: safe });
+    this.audit({ kind: "tool.result", tool: command.name, summary: result.ok ? `conexão ativa (${result.tablesCount ?? 0} tabelas)` : `conexão falhou: ${result.errorCode}`, detail: safe });
+    this.logToolResult(command.invocationId, command.name, true, { payload: summarizeToolPayload(safe) });
   }
 
   public proposeMapping(input: { mapping: ValidatedMappingConfig; rationale: string; previewRows: unknown[] }): void {

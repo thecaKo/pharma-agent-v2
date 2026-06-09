@@ -37,7 +37,7 @@ describe("AiSession", () => {
     const types = sent.map((m) => m.type);
     expect(types).toContain("ai.catalog");
     expect(types).toContain("ai.session.state");
-    expect(sent.find((m) => m.type === "ai.catalog").tools).toHaveLength(15);
+    expect(sent.find((m) => m.type === "ai.catalog").tools).toHaveLength(17);
   });
 
   it("tool.invoke emite tool.result e audit.event com seq incremental", async () => {

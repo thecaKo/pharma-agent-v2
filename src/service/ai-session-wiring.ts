@@ -9,6 +9,7 @@ import type { AdminResponseMessage, AdminRequestMessage } from "../transport/pro
 import type { DatabaseConfig } from "../config/types.js";
 import type { ValidatedMappingConfig } from "../mapping/types.js";
 import type { Logger } from "../logging/logger.js";
+import type { DiscoveredConnection } from "../discovery/connection-candidates.js";
 
 type ProbeDeps = Pick<
   AdminRouterDependencies,
@@ -51,6 +52,10 @@ export interface AiSessionDepsInput {
   currentDatabase: () => DatabaseConfig | undefined;
   activateMapping: (mapping: ValidatedMappingConfig) => Promise<void>;
   currentEngine: () => string;
+  /** Descobre conexões candidatas (configs + DSNs ODBC) — credenciais ficam locais. */
+  discoverConnections?: () => Promise<DiscoveredConnection[]>;
+  /** Estabelece (read-only) a conexão escolhida e a torna a ativa das tools de schema. */
+  useConnection?: (config: DatabaseConfig) => Promise<{ ok: boolean; tablesCount?: number; errorCode?: string }>;
   /** Logger para observabilidade no STDOUT do agente (eventos do ciclo da sessão). */
   logger?: Logger;
 }
@@ -61,6 +66,8 @@ export function buildAiSessionDeps(input: AiSessionDepsInput): AiSessionDeps {
     secrets: input.secrets,
     now: input.now,
     currentEngine: input.currentEngine,
+    ...(input.discoverConnections ? { discoverConnections: input.discoverConnections } : {}),
+    ...(input.useConnection ? { useConnection: input.useConnection } : {}),
     ...(input.logger ? { logger: input.logger } : {}),
     applyApproval: async (mapping) => {
       const database = input.currentDatabase();
