@@ -5,8 +5,6 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { ConnectorRuntime } from "../../src/service/runtime.js";
 import { StateStore } from "../../src/state/state-store.js";
-import type { DiscoveredConnection } from "../../src/discovery/connection-candidates.js";
-import type { DatabaseConfig } from "../../src/config/types.js";
 
 class FakeTransport extends EventEmitter {
   public connect = vi.fn(async () => {
@@ -37,33 +35,14 @@ const env = {
   PROGRAMDATA: "/tmp/does-not-matter"
 } as never;
 
-const FULL_CONFIG: DatabaseConfig = {
+const PARAMS = {
   driver: "mysql",
   host: "10.0.0.9",
   port: 3306,
-  name: "loja",
   user: "leitor",
-  password: "topsecret"
+  password: "topsecret",
+  database: "loja"
 };
-
-function discovery(): DiscoveredConnection[] {
-  return [
-    {
-      handle: "conn-0",
-      config: FULL_CONFIG,
-      descriptor: {
-        handle: "conn-0",
-        driver: "mysql",
-        host: "10.0.0.9",
-        port: 3306,
-        user: "leitor",
-        database: "loja",
-        source: "config:/etc/app/db.conf",
-        label: "mysql @ 10.0.0.9:3306 (leitor) — config:/etc/app/db.conf"
-      }
-    }
-  ];
-}
 
 function makeRuntime(transport: FakeTransport, discoveredListTables: string[]) {
   // Fake da conexão mysql2: listTables faz `select table_name as name ...` e o
@@ -78,9 +57,8 @@ function makeRuntime(transport: FakeTransport, discoveredListTables: string[]) {
     transport: transport as never,
     now: () => "2026-06-09T00:00:00.000Z",
     stateStore: new StateStore({ stateFilePath: join(tmpdir(), `rt-${randomUUID()}.json`) }),
-    discoverConnections: async () => discovery(),
-    // O connection.use cria adapter via adapter-factory; injetamos um factory
-    // mysql que devolve uma conexão fake (sem driver real).
+    // db.connect cria adapter via adapter-factory; injetamos um factory mysql que
+    // devolve uma conexão fake (sem driver real).
     adapterDependencies: {
       mysqlConnectionFactory: connectionFactory,
       firebirdConnectionFactory: vi.fn(),
@@ -96,43 +74,20 @@ async function aiMessages(transport: FakeTransport) {
   return (transport.sendAiSessionMessage.mock.calls as Array<[unknown]>).map((c) => c[0]) as Array<Record<string, unknown>>;
 }
 
-describe("ConnectorRuntime — connection.* tools (discover→use→schema)", () => {
-  it("connection.discoverCandidates devolve descritores redigidos (sem senha)", async () => {
-    const transport = new FakeTransport();
-    const { runtime } = makeRuntime(transport, ["produtos", "precos"]);
-    await runtime.start();
-
-    transport.emit("aiSessionStart", { sessionId: "s1" });
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "d1", name: "connection.discoverCandidates", input: {} });
-
-    await vi.waitFor(async () => {
-      const msgs = await aiMessages(transport);
-      expect(msgs.some((m) => m.type === "tool.result" && m.invocationId === "d1")).toBe(true);
-    });
-    const result = (await aiMessages(transport)).find((m) => m.type === "tool.result" && m.invocationId === "d1") as { payload: { candidates: unknown[] } };
-    expect(result.payload.candidates).toEqual([discovery()[0].descriptor]);
-    expect(JSON.stringify(result)).not.toContain("topsecret");
-
-    await runtime.shutdown();
-  });
-
-  it("connection.use conecta e schema.listTables passa a operar na conexão estabelecida", async () => {
+describe("ConnectorRuntime — db.connect (connect→schema)", () => {
+  it("db.connect conecta com os params e schema.listTables passa a operar na conexão", async () => {
     const transport = new FakeTransport();
     const { runtime } = makeRuntime(transport, ["produtos", "precos", "estoque"]);
     await runtime.start();
 
     transport.emit("aiSessionStart", { sessionId: "s1" });
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "d1", name: "connection.discoverCandidates", input: {} });
+    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "c1", name: "db.connect", input: PARAMS });
     await vi.waitFor(async () => {
-      expect((await aiMessages(transport)).some((m) => m.invocationId === "d1" && m.type === "tool.result")).toBe(true);
+      expect((await aiMessages(transport)).some((m) => m.invocationId === "c1" && m.type === "tool.result")).toBe(true);
     });
-
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "u1", name: "connection.use", input: { handle: "conn-0" } });
-    await vi.waitFor(async () => {
-      expect((await aiMessages(transport)).some((m) => m.invocationId === "u1" && m.type === "tool.result")).toBe(true);
-    });
-    const useResult = (await aiMessages(transport)).find((m) => m.invocationId === "u1") as { payload: { ok: boolean; tablesCount: number } };
-    expect(useResult.payload).toEqual({ ok: true, tablesCount: 3 });
+    const connectResult = (await aiMessages(transport)).find((m) => m.invocationId === "c1") as { payload: { ok: boolean; tablesCount: number } };
+    expect(connectResult.payload).toEqual({ ok: true, tablesCount: 3 });
+    expect(JSON.stringify(connectResult)).not.toContain("topsecret");
 
     // Agora as tools de schema operam na conexão estabelecida (3 tabelas).
     transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "lt", name: "schema.listTables", input: {} });
@@ -146,23 +101,19 @@ describe("ConnectorRuntime — connection.* tools (discover→use→schema)", ()
     await runtime.shutdown();
   });
 
-  it("connection.use com handle desconhecido devolve { ok:false, errorCode }", async () => {
+  it("db.connect com params incompletos → { ok:false, INVALID_INPUT }", async () => {
     const transport = new FakeTransport();
     const { runtime } = makeRuntime(transport, ["produtos"]);
     await runtime.start();
 
     transport.emit("aiSessionStart", { sessionId: "s1" });
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "d1", name: "connection.discoverCandidates", input: {} });
+    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "c9", name: "db.connect", input: { driver: "mysql", host: "h" } });
     await vi.waitFor(async () => {
-      expect((await aiMessages(transport)).some((m) => m.invocationId === "d1")).toBe(true);
+      expect((await aiMessages(transport)).some((m) => m.invocationId === "c9")).toBe(true);
     });
-
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "u9", name: "connection.use", input: { handle: "conn-99" } });
-    await vi.waitFor(async () => {
-      expect((await aiMessages(transport)).some((m) => m.invocationId === "u9")).toBe(true);
-    });
-    const r = (await aiMessages(transport)).find((m) => m.invocationId === "u9") as { payload: { ok: boolean; errorCode: string } };
-    expect(r.payload).toEqual({ ok: false, errorCode: "UNKNOWN_HANDLE" });
+    const r = (await aiMessages(transport)).find((m) => m.invocationId === "c9") as { ok: boolean; errorCode: string };
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe("INVALID_INPUT");
 
     await runtime.shutdown();
   });
@@ -173,13 +124,9 @@ describe("ConnectorRuntime — connection.* tools (discover→use→schema)", ()
     await runtime.start();
 
     transport.emit("aiSessionStart", { sessionId: "s1" });
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "d1", name: "connection.discoverCandidates", input: {} });
+    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "c1", name: "db.connect", input: PARAMS });
     await vi.waitFor(async () => {
-      expect((await aiMessages(transport)).some((m) => m.invocationId === "d1")).toBe(true);
-    });
-    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "u1", name: "connection.use", input: { handle: "conn-0" } });
-    await vi.waitFor(async () => {
-      expect((await aiMessages(transport)).some((m) => m.invocationId === "u1")).toBe(true);
+      expect((await aiMessages(transport)).some((m) => m.invocationId === "c1")).toBe(true);
     });
     const fakeConn = await connectionFactory.mock.results[0].value;
 
