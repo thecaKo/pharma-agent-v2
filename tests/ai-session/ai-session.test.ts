@@ -153,6 +153,43 @@ describe("AiSession", () => {
     expect(state.phase).toBe("proposing");
   });
 
+  it("quando handleAdminRequest rejeita, emite tool.result ok:false INTERNAL_ERROR", async () => {
+    const deps = depsWith({
+      handleAdminRequest: vi.fn(async () => { throw new Error("boom"); })
+    });
+    const { sent, emit } = collector();
+    const session = new AiSession({ sessionId: "s1", emit, deps });
+    await session.start();
+    await session.invokeTool({ sessionId: "s1", invocationId: "i1", name: "schema.listTables", input: {} });
+    const result = sent.find((m) => m.type === "tool.result" && m.invocationId === "i1");
+    expect(result).toBeDefined();
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe("INTERNAL_ERROR");
+    const errAudit = sent.filter((m) => m.type === "audit.event").pop();
+    expect(errAudit.kind).toBe("tool.result");
+  });
+
+  it("quando handleAdminRequest nunca resolve, emite tool.result ok:false TOOL_TIMEOUT após o timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = depsWith({
+        handleAdminRequest: vi.fn(() => new Promise<never>(() => { /* nunca resolve */ }))
+      });
+      const { sent, emit } = collector();
+      const session = new AiSession({ sessionId: "s1", emit, deps });
+      await session.start();
+      const promise = session.invokeTool({ sessionId: "s1", invocationId: "i1", name: "schema.listTables", input: {} });
+      await vi.advanceTimersByTimeAsync(26000);
+      await promise;
+      const result = sent.find((m) => m.type === "tool.result" && m.invocationId === "i1");
+      expect(result).toBeDefined();
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("TOOL_TIMEOUT");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propõe via proposeMapping com previewRows redigidas", async () => {
     const { sent, emit } = collector();
     const session = new AiSession({ sessionId: "s1", emit, deps: depsWith() });

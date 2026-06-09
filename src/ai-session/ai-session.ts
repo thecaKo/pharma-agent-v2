@@ -12,6 +12,10 @@ import {
 import { buildToolCatalog, CATALOG_VERSION, toolNameToAdminCommand, PROPOSE_READONLY_USER_TOOL } from "./tool-catalog.js";
 import { READONLY_USERNAME_PATTERN } from "../db/provision-types.js";
 
+const AI_TOOL_EXEC_TIMEOUT_MS = 25000;
+
+const TOOL_TIMEOUT = Symbol("tool-timeout");
+
 export type AiSessionOutboundMessage =
   | AiCatalogMessage | ToolResultMessage | AuditEventMessage
   | MappingProposedMessage | AiSessionStateMessage;
@@ -83,21 +87,45 @@ export class AiSession {
     }
 
     const req = { ...buildAdminRequestMessage({ requestId: command.invocationId, command: adminCommand }, this.deps.now()), input: command.input };
-    const response = await this.deps.handleAdminRequest(req);
 
-    if (response.ok) {
-      const safePayload = redactValue(response.payload, secrets);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<typeof TOOL_TIMEOUT>((resolve) => {
+        timer = setTimeout(() => resolve(TOOL_TIMEOUT), AI_TOOL_EXEC_TIMEOUT_MS);
+      });
+      const response = await Promise.race([this.deps.handleAdminRequest(req), timeout]);
+
+      if (response === TOOL_TIMEOUT) {
+        this.emit(buildToolResultMessage(
+          { sessionId: this.sessionId, invocationId: command.invocationId, ok: false, errorCode: "TOOL_TIMEOUT" },
+          this.deps.now()
+        ));
+        this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} excedeu o tempo limite (${AI_TOOL_EXEC_TIMEOUT_MS}ms)` });
+        return;
+      }
+
+      if (response.ok) {
+        const safePayload = redactValue(response.payload, secrets);
+        this.emit(buildToolResultMessage(
+          { sessionId: this.sessionId, invocationId: command.invocationId, ok: true, payload: safePayload },
+          this.deps.now()
+        ));
+        this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} ok`, detail: safePayload });
+      } else {
+        this.emit(buildToolResultMessage(
+          { sessionId: this.sessionId, invocationId: command.invocationId, ok: false, errorCode: response.error.errorCode },
+          this.deps.now()
+        ));
+        this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} falhou: ${response.error.errorCode}` });
+      }
+    } catch (err) {
       this.emit(buildToolResultMessage(
-        { sessionId: this.sessionId, invocationId: command.invocationId, ok: true, payload: safePayload },
+        { sessionId: this.sessionId, invocationId: command.invocationId, ok: false, errorCode: "INTERNAL_ERROR" },
         this.deps.now()
       ));
-      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} ok`, detail: safePayload });
-    } else {
-      this.emit(buildToolResultMessage(
-        { sessionId: this.sessionId, invocationId: command.invocationId, ok: false, errorCode: response.error.errorCode },
-        this.deps.now()
-      ));
-      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} falhou: ${response.error.errorCode}` });
+      this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} erro interno: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
