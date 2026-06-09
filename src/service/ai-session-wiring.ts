@@ -25,6 +25,13 @@ export interface RuntimeAdminDepsInput {
 export function buildRuntimeAdminDeps(input: RuntimeAdminDepsInput): AdminRouterDependencies {
   return {
     ...input.probeDeps,
+    // schema.listTables PRECISA usar o adapter real — o spread de probeDeps traz
+    // um stub `() => []` que, sem este override, faria listTables retornar vazio
+    // em QUALQUER banco. Mapeia DatabaseTable[] -> string[] (contrato da dep).
+    schemaListTables: async () => {
+      const tables = await (await input.getAdapter()).listTables();
+      return tables.map((table) => table.name);
+    },
     schemaDescribeTable: async (table) => (await input.getAdapter()).describeTable(table),
     schemaListForeignKeys: async (table) => (await input.getAdapter()).listForeignKeys(table),
     schemaSampleRows: async (table, limit) => (await input.getAdapter()).sampleRows(table, limit),
