@@ -23,6 +23,9 @@ export type AdminCommand =
   | "schema.sampleRows"
   | "sql.runReadOnlySelect"
   | "fs.readConfigFile"
+  | "fs.listDir"
+  | "fs.readFile"
+  | "fs.stat"
   | "registry.readKey"
   | "probe.engines"
   | "probe.odbc_dsns"
@@ -539,6 +542,9 @@ const ADMIN_COMMANDS = new Set<AdminCommand>([
   "schema.sampleRows",
   "sql.runReadOnlySelect",
   "fs.readConfigFile",
+  "fs.listDir",
+  "fs.readFile",
+  "fs.stat",
   "registry.readKey",
   "probe.engines",
   "probe.odbc_dsns",
