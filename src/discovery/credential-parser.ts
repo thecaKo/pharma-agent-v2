@@ -1,4 +1,5 @@
 import type { DatabaseDriver } from "../config/types.js";
+import type { OdbcDsnCandidate } from "./odbc-dsns.js";
 
 /**
  * Candidato parcial extraído de um conteúdo de config. Pode estar incompleto;
@@ -183,6 +184,20 @@ function firstMatch(map: Map<string, string>, keys: readonly string[]): string |
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+/**
+ * Converte um DSN ODBC já enumerado em ParsedCredential, normalizando o driver
+ * e aplicando porta default. DSNs sem driver mapeável ou sem host viram
+ * `undefined` (não viram candidato). DSNs não trazem senha.
+ */
+export function normalizeOdbcCredential(dsn: OdbcDsnCandidate): ParsedCredential | undefined {
+  const driver = normalizeDriver(dsn.driver);
+  if (!driver || !dsn.host || !dsn.user) return undefined;
+  const out: ParsedCredential = { driver, host: dsn.host, user: dsn.user };
+  if (dsn.port !== undefined) out.port = dsn.port;
+  if (dsn.database) out.database = dsn.database;
+  return withDefaultPort(out);
 }
 
 function dedupe(creds: ParsedCredential[]): ParsedCredential[] {
