@@ -166,4 +166,26 @@ describe("ConnectorRuntime — connection.* tools (discover→use→schema)", ()
 
     await runtime.shutdown();
   });
+
+  it("A5: ao abortar a sessão a conexão estabelecida é descartada (fecha o adapter)", async () => {
+    const transport = new FakeTransport();
+    const { runtime, connectionFactory } = makeRuntime(transport, ["produtos"]);
+    await runtime.start();
+
+    transport.emit("aiSessionStart", { sessionId: "s1" });
+    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "d1", name: "connection.discoverCandidates", input: {} });
+    await vi.waitFor(async () => {
+      expect((await aiMessages(transport)).some((m) => m.invocationId === "d1")).toBe(true);
+    });
+    transport.emit("aiToolInvoke", { sessionId: "s1", invocationId: "u1", name: "connection.use", input: { handle: "conn-0" } });
+    await vi.waitFor(async () => {
+      expect((await aiMessages(transport)).some((m) => m.invocationId === "u1")).toBe(true);
+    });
+    const fakeConn = await connectionFactory.mock.results[0].value;
+
+    transport.emit("aiSessionAbort", { sessionId: "s1", reason: "user" });
+    await vi.waitFor(() => expect(fakeConn.end).toHaveBeenCalled());
+
+    await runtime.shutdown();
+  });
 });
