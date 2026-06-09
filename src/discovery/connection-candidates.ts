@@ -34,6 +34,12 @@ export interface ConnectionCandidatesDeps {
   scanConfigDirs: (input: ScanConfigDirsInput) => Promise<ScanConfigDirsResult>;
   readConfigFile: (input: { path: string }) => Promise<ReadConfigFileResult>;
   probeOdbcDsns: () => Promise<OdbcDsnCandidate[]>;
+  /**
+   * Varre roots comuns por arquivos de banco Firebird (`*.fdb`/`*.gdb`).
+   * Opcional: ausente → fonte firebird-file desativada. Reutiliza o mesmo
+   * mecanismo/limites do scan de config (deny-list, profundidade, contagem).
+   */
+  scanFirebirdFiles?: (input: ScanConfigDirsInput) => Promise<ScanConfigDirsResult>;
   platform?: NodeJS.Platform;
 }
 
@@ -57,6 +63,38 @@ const POSIX_ROOTS = [
 
 function defaultRootsFor(platform: NodeJS.Platform): string[] {
   return platform === "win32" ? WINDOWS_ROOTS : POSIX_ROOTS;
+}
+
+// Padrões de arquivo de banco Firebird (embarcado/arquivo) usados pelo scan.
+export const FIREBIRD_FILE_PATTERNS = ["*.fdb", "*.gdb"] as const;
+
+// Roots razoáveis por SO onde costumam viver arquivos .fdb/.gdb de ERP/PDV de
+// farmácia (Firebird embarcado, sem serviço/porta). Mantidos isolados dos roots
+// de config para serem extensíveis sem afetar a outra fonte. As env vars são
+// expandidas por probeScanConfigDirs.
+const WINDOWS_FIREBIRD_ROOTS = [
+  "%PROGRAMFILES%",
+  "%PROGRAMFILES(X86)%",
+  "%PROGRAMDATA%",
+  "C:\\Firebird",
+  "C:\\Dados",
+  "C:\\DADOS",
+  "C:\\ERP",
+  "C:\\Linx",
+  "C:\\Inovafarma",
+  "C:\\Trier"
+];
+
+const POSIX_FIREBIRD_ROOTS = [
+  "/opt",
+  "/srv",
+  "/var/lib/firebird",
+  "/var/db",
+  "%HOME%"
+];
+
+function defaultFirebirdRootsFor(platform: NodeJS.Platform): string[] {
+  return platform === "win32" ? WINDOWS_FIREBIRD_ROOTS : POSIX_FIREBIRD_ROOTS;
 }
 
 export async function discoverConnectionCandidates(
@@ -106,7 +144,53 @@ export async function discoverConnectionCandidates(
     if (parsed) push(parsed, `odbc:${dsn.name}`);
   }
 
+  // 3) Arquivos de banco Firebird (.fdb/.gdb). PDV de farmácia comumente usa
+  //    Firebird embarcado/arquivo, sem serviço/porta — probe.engines não pega.
+  if (deps.scanFirebirdFiles) {
+    let fbScan: ScanConfigDirsResult;
+    try {
+      fbScan = await deps.scanFirebirdFiles({
+        roots: defaultFirebirdRootsFor(platform),
+        patterns: FIREBIRD_FILE_PATTERNS
+      });
+    } catch {
+      fbScan = { files: [], truncated: false, rootsRejected: [], errors: [] };
+    }
+    for (const file of fbScan.files) {
+      const handle = `conn-${index}`;
+      index += 1;
+      const config = firebirdFileConfig(file.path);
+      out.push({ handle, config, descriptor: buildFirebirdFileDescriptor(handle, file.path) });
+    }
+  }
+
   return out;
+}
+
+function firebirdFileConfig(filePath: string): DatabaseConfig {
+  // Caminho do arquivo NÃO é segredo (pode aparecer). A senha 'masterkey' fica
+  // só aqui, na config local — nunca no descritor redigido.
+  return {
+    driver: "firebird",
+    host: "localhost",
+    port: 3050,
+    name: filePath,
+    user: "SYSDBA",
+    password: "masterkey"
+  };
+}
+
+function buildFirebirdFileDescriptor(handle: string, filePath: string): IConnectionCandidate {
+  return {
+    handle,
+    driver: "firebird",
+    host: "localhost",
+    port: 3050,
+    user: "SYSDBA",
+    database: filePath,
+    source: `firebird-file:${filePath}`,
+    label: `firebird @ ${filePath} (SYSDBA)`
+  };
 }
 
 function toDatabaseConfig(parsed: ParsedCredential): DatabaseConfig | undefined {

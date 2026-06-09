@@ -836,7 +836,8 @@ export class ConnectorRuntime {
     return discoverConnectionCandidates({
       scanConfigDirs: (input) => probeScanConfigDirs({ fs: nodeFileSystemReader }, input),
       readConfigFile: (input) => readConfigFile({ fs: nodeFileSystemReader }, input),
-      probeOdbcDsns: () => probeOdbcDsns(registry)
+      probeOdbcDsns: () => probeOdbcDsns(registry),
+      scanFirebirdFiles: (input) => probeScanConfigDirs({ fs: nodeFileSystemReader }, input)
     });
   }
 
