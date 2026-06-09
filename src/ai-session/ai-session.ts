@@ -1,5 +1,6 @@
 import { buildAdminRequestMessage, type AdminResponseMessage } from "../transport/protocol.js";
 import { redactValue } from "../logging/redact.js";
+import type { Logger } from "../logging/logger.js";
 import { validateMappingConfig } from "../mapping/validate.js";
 import type { ValidatedMappingConfig, MappingConfig } from "../mapping/types.js";
 import {
@@ -28,6 +29,54 @@ export interface AiSessionDeps {
   applyApproval: (mapping: ValidatedMappingConfig) => Promise<void>;
   now: () => string;
   currentEngine: () => string;
+  /**
+   * Logger opcional para observabilidade no STDOUT do agente. Não altera
+   * comportamento — só emite logs (já redigidos) dos eventos do ciclo da sessão.
+   */
+  logger?: Logger;
+}
+
+const LOG_STRING_MAX = 500;
+
+/**
+ * Trunca strings longas em qualquer nível de um valor já redigido, para evitar
+ * despejar payloads enormes no STDOUT. Não muta a entrada original.
+ */
+function truncateForLog(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return value.length > LOG_STRING_MAX ? `${value.slice(0, LOG_STRING_MAX)}…[+${value.length - LOG_STRING_MAX}]` : value;
+  }
+  if (depth >= 6) return "[…]";
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => truncateForLog(item, depth + 1));
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, truncateForLog(v, depth + 1)])
+    );
+  }
+  return value;
+}
+
+/**
+ * Resumo seguro de um payload de tool já redigido: para coleções conhecidas
+ * loga apenas CONTAGENS (nunca os valores), e trunca o resto.
+ */
+function summarizeToolPayload(payload: unknown): unknown {
+  if (payload === null || typeof payload !== "object") return truncateForLog(payload);
+  if (Array.isArray(payload)) return { count: payload.length };
+  const record = payload as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (Array.isArray(value)) {
+      summary[`${key}Count`] = value.length;
+    } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      summary[key] = truncateForLog(value);
+    } else if (value !== null && typeof value === "object") {
+      summary[`${key}Keys`] = Object.keys(value as Record<string, unknown>).length;
+    }
+  }
+  return summary;
 }
 
 export interface AiSessionOptions {
@@ -56,11 +105,23 @@ export class AiSession {
   }
 
   public async start(): Promise<void> {
+    this.deps.logger?.info("ai_session.start", { sessionId: this.sessionId });
     this.emit(buildAiCatalogMessage(
       { sessionId: this.sessionId, catalogVersion: CATALOG_VERSION, tools: buildToolCatalog() },
       this.deps.now()
     ));
     this.transition("discovering");
+  }
+
+  private logToolResult(invocationId: string, name: string, ok: boolean, extra: { errorCode?: string; payload?: unknown }): void {
+    this.deps.logger?.info("ai_session.tool_result", {
+      sessionId: this.sessionId,
+      invocationId,
+      name,
+      ok,
+      ...(extra.errorCode !== undefined ? { errorCode: extra.errorCode } : {}),
+      ...(extra.payload !== undefined ? { summary: extra.payload } : {})
+    });
   }
 
   public async invokeTool(command: ToolInvokeCommand): Promise<void> {
@@ -69,7 +130,14 @@ export class AiSession {
     this.seenInvocations.add(command.invocationId);
 
     const secrets = this.deps.secrets();
-    this.audit({ kind: "tool.invoke", tool: command.name, summary: `invoca ${command.name}`, detail: redactValue(command.input, secrets) });
+    const safeInput = redactValue(command.input, secrets);
+    this.deps.logger?.info("ai_session.tool_invoke", {
+      sessionId: this.sessionId,
+      invocationId: command.invocationId,
+      name: command.name,
+      input: truncateForLog(safeInput)
+    });
+    this.audit({ kind: "tool.invoke", tool: command.name, summary: `invoca ${command.name}`, detail: safeInput });
 
     if (command.name === PROPOSE_READONLY_USER_TOOL) {
       this.handleProposeReadonlyUser(command);
@@ -83,6 +151,7 @@ export class AiSession {
         this.deps.now()
       ));
       this.audit({ kind: "tool.result", tool: command.name, summary: `ferramenta fora do catálogo: ${command.name}` });
+      this.logToolResult(command.invocationId, command.name, false, { errorCode: "INVALID_INPUT" });
       return;
     }
 
@@ -101,6 +170,7 @@ export class AiSession {
           this.deps.now()
         ));
         this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} excedeu o tempo limite (${AI_TOOL_EXEC_TIMEOUT_MS}ms)` });
+        this.logToolResult(command.invocationId, command.name, false, { errorCode: "TOOL_TIMEOUT" });
         return;
       }
 
@@ -111,12 +181,14 @@ export class AiSession {
           this.deps.now()
         ));
         this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} ok`, detail: safePayload });
+        this.logToolResult(command.invocationId, command.name, true, { payload: summarizeToolPayload(safePayload) });
       } else {
         this.emit(buildToolResultMessage(
           { sessionId: this.sessionId, invocationId: command.invocationId, ok: false, errorCode: response.error.errorCode },
           this.deps.now()
         ));
         this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} falhou: ${response.error.errorCode}` });
+        this.logToolResult(command.invocationId, command.name, false, { errorCode: response.error.errorCode });
       }
     } catch (err) {
       this.emit(buildToolResultMessage(
@@ -124,6 +196,7 @@ export class AiSession {
         this.deps.now()
       ));
       this.audit({ kind: "tool.result", tool: command.name, summary: `${command.name} erro interno: ${err instanceof Error ? err.message : String(err)}` });
+      this.logToolResult(command.invocationId, command.name, false, { errorCode: "INTERNAL_ERROR" });
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -138,6 +211,7 @@ export class AiSession {
         this.deps.now()
       ));
       this.audit({ kind: "tool.result", tool: command.name, summary: `username inválido para usuário read-only` });
+      this.logToolResult(command.invocationId, command.name, false, { errorCode: "INVALID_INPUT" });
       return;
     }
     const engine = this.deps.currentEngine();
@@ -147,6 +221,9 @@ export class AiSession {
       this.deps.now()
     ));
     this.audit({ kind: "tool.result", tool: command.name, summary: `proposta de usuário read-only ${username} (${engine})`, detail: payload });
+    this.logToolResult(command.invocationId, command.name, true, {
+      payload: summarizeToolPayload(redactValue(payload, this.deps.secrets()))
+    });
   }
 
   public proposeMapping(input: { mapping: ValidatedMappingConfig; rationale: string; previewRows: unknown[] }): void {
@@ -166,10 +243,12 @@ export class AiSession {
   public async handleDecision(command: MappingDecisionCommand): Promise<void> {
     if (this.controller.signal.aborted) return;
     if (command.decision === "reject") {
+      this.deps.logger?.info("ai_session.mapping_decision", { sessionId: this.sessionId, decision: "reject" });
       this.audit({ kind: "mapping.decision", summary: "mapping rejeitado" });
       this.transition("proposing");
       return;
     }
+    this.deps.logger?.info("ai_session.mapping_decision", { sessionId: this.sessionId, decision: "approve" });
     const candidate: MappingConfig = command.editedMapping ?? (this.proposedMapping as MappingConfig | undefined) ?? {};
     const validated = validateMappingConfig(candidate);
     this.transition("applying");
@@ -186,6 +265,7 @@ export class AiSession {
   public abort(reason: string): void {
     if (this.controller.signal.aborted) return;
     this.controller.abort();
+    this.deps.logger?.info("ai_session.abort", { sessionId: this.sessionId, reason: truncateForLog(reason) });
     this.audit({ kind: "ai.session.abort", summary: `sessão abortada: ${reason}` });
     this.transition("aborted", reason);
   }
@@ -195,6 +275,7 @@ export class AiSession {
   }
 
   private transition(phase: AiSessionPhase, detail?: string): void {
+    this.deps.logger?.info("ai_session.transition", { sessionId: this.sessionId, phase, ...(detail ? { detail: truncateForLog(detail) } : {}) });
     this.emit(buildAiSessionStateMessage({ sessionId: this.sessionId, phase, ...(detail ? { detail } : {}) }, this.deps.now()));
   }
 

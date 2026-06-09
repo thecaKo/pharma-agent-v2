@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AiSession, type AiSessionEmit, type AiSessionDeps } from "../../src/ai-session/ai-session.js";
+import type { Logger } from "../../src/logging/logger.js";
 import { buildAdminSuccessResponseMessage } from "../../src/transport/protocol.js";
 import type { ValidatedMappingConfig } from "../../src/mapping/types.js";
 
@@ -188,6 +189,64 @@ describe("AiSession", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("OBSERVABILIDADE: loga start, tool_invoke (input redigido), tool_result (com resumo) e transition", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { emit } = collector();
+    const session = new AiSession({ sessionId: "s1", emit, deps: depsWith({ logger }) });
+    await session.start();
+    await session.invokeTool({ sessionId: "s1", invocationId: "i1", name: "schema.listTables", input: {} });
+
+    const calls = (logger.info as any).mock.calls as Array<[string, Record<string, unknown>]>;
+    const actions = calls.map(([action]) => action);
+    expect(actions).toContain("ai_session.start");
+    expect(actions).toContain("ai_session.tool_invoke");
+    expect(actions).toContain("ai_session.tool_result");
+    expect(actions).toContain("ai_session.transition");
+
+    const invoke = calls.find(([a]) => a === "ai_session.tool_invoke")?.[1];
+    expect(invoke).toMatchObject({ sessionId: "s1", invocationId: "i1", name: "schema.listTables" });
+
+    // tool_result loga ok + RESUMO (contagem de tabelas), nunca os valores
+    const result = calls.find(([a]) => a === "ai_session.tool_result")?.[1];
+    expect(result).toMatchObject({ invocationId: "i1", name: "schema.listTables", ok: true });
+    expect((result as any).summary).toMatchObject({ tablesCount: 1 });
+    expect(JSON.stringify((result as any).summary)).not.toContain("produtos");
+  });
+
+  it("OBSERVABILIDADE: input logado em tool_invoke nunca contém o segredo cru", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { emit } = collector();
+    const session = new AiSession({ sessionId: "s1", emit, deps: depsWith({ logger }) });
+    await session.start();
+    await session.invokeTool({
+      sessionId: "s1", invocationId: "i1", name: "probe.test_connection",
+      input: { driver: "mssql", password: SECRET, dsn: `Server=x;Pwd=${SECRET}` }
+    });
+    const calls = (logger.info as any).mock.calls as Array<[string, Record<string, unknown>]>;
+    const invoke = calls.find(([a]) => a === "ai_session.tool_invoke")?.[1];
+    expect(JSON.stringify(invoke)).not.toContain(SECRET);
+    expect(JSON.stringify(invoke)).toContain("[REDACTED]");
+  });
+
+  it("OBSERVABILIDADE: loga mapping_decision e abort", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { emit } = collector();
+    const session = new AiSession({ sessionId: "s1", emit, deps: depsWith({ logger }) });
+    await session.start();
+    session.setProposedMapping(mapping);
+    await session.handleDecision({ sessionId: "s1", decision: "approve" });
+    const calls = (logger.info as any).mock.calls as Array<[string, Record<string, unknown>]>;
+    const decision = calls.find(([a]) => a === "ai_session.mapping_decision")?.[1];
+    expect(decision).toMatchObject({ decision: "approve" });
+
+    const session2 = new AiSession({ sessionId: "s2", emit, deps: depsWith({ logger }) });
+    await session2.start();
+    session2.abort("user");
+    const calls2 = (logger.info as any).mock.calls as Array<[string, Record<string, unknown>]>;
+    const abort = calls2.find(([a]) => a === "ai_session.abort")?.[1];
+    expect(abort).toMatchObject({ sessionId: "s2", reason: "user" });
   });
 
   it("propõe via proposeMapping com previewRows redigidas", async () => {
