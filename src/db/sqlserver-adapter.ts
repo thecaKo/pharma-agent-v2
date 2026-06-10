@@ -3,7 +3,7 @@ import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
-import { ReadOnlySqlError } from "./readonly-sql.js";
+import { ReadOnlySqlError, validateReadOnlySelect } from "./readonly-sql.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
@@ -189,10 +189,79 @@ export class SqlServerSourceAdapter implements SourceDatabaseAdapter {
     };
   }
 
-  public async describeTable(_tableName: string): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
-  public async listForeignKeys(_tableName?: string): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
-  public async sampleRows(_tableName: string, _limit: number): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
-  public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
+  public async describeTable(tableName: string): Promise<DatabaseColumn[]> {
+    return this.listColumns(tableName);
+  }
+
+  public async listForeignKeys(tableName?: string): Promise<ForeignKey[]> {
+    const connection = this.requireConnection("listColumns");
+    try {
+      const filter = tableName !== undefined ? "where object_id(@table) = fk.parent_object_id" : "";
+      const result = await connection.query(
+        `
+          select object_name(fk.parent_object_id) as fromTable,
+                 cp.name as fromColumn,
+                 object_name(fk.referenced_object_id) as toTable,
+                 cr.name as toColumn,
+                 fk.name as constraintName
+          from sys.foreign_keys fk
+          join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id
+          join sys.columns cp on cp.object_id = fkc.parent_object_id and cp.column_id = fkc.parent_column_id
+          join sys.columns cr on cr.object_id = fkc.referenced_object_id and cr.column_id = fkc.referenced_column_id
+          ${filter}
+          order by fromTable, fkc.constraint_column_id
+        `,
+        tableName !== undefined ? { table: tableName } : {}
+      );
+      return normalizeSqlServerForeignKeys(result.recordset);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "sqlserver",
+        operation: "listColumns",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async sampleRows(tableName: string, limit: number): Promise<SourceRow[]> {
+    const safeLimit = clampSampleLimit(limit);
+    const safeTable = tableName
+      .split(".")
+      .map((part) => quoteSqlServerIdentifier(part))
+      .join(".");
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(`select top (${safeLimit}) * from ${safeTable}`, {});
+      return normalizeRows(result.recordset);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "sqlserver",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async runReadOnlySelect(input: RunReadOnlySelectInput): Promise<SourceRow[]> {
+    const validated = validateReadOnlySelect(input.sql, { maxLimit: clampSampleLimit(input.limit) });
+    if (!validated.ok) {
+      throw new ReadOnlySqlError(validated.error);
+    }
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(validated.sql, {});
+      return normalizeRows(result.recordset);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "sqlserver",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
@@ -325,6 +394,24 @@ function normalizeCursorParam(value: QueryChangesInput["cursor"]): unknown {
   if (trimmed.length === 0) return null;
   const parsedAt = Date.parse(trimmed);
   return Number.isNaN(parsedAt) ? trimmed : new Date(parsedAt);
+}
+
+function normalizeSqlServerForeignKeys(recordset: unknown): ForeignKey[] {
+  if (!Array.isArray(recordset)) return [];
+  return recordset.filter(isRecord).flatMap((row) => {
+    const fromTable = typeof row.fromTable === "string" ? row.fromTable : undefined;
+    const fromColumn = typeof row.fromColumn === "string" ? row.fromColumn : undefined;
+    const toTable = typeof row.toTable === "string" ? row.toTable : undefined;
+    const toColumn = typeof row.toColumn === "string" ? row.toColumn : undefined;
+    if (!fromTable || !fromColumn || !toTable || !toColumn) return [];
+    const constraintName = typeof row.constraintName === "string" ? row.constraintName : undefined;
+    return [{ fromTable, fromColumn, toTable, toColumn, ...(constraintName ? { constraintName } : {}) }];
+  });
+}
+
+function clampSampleLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit < 1) return 1;
+  return Math.min(Math.trunc(limit), 1000);
 }
 
 function notSupported(op: string): Error {

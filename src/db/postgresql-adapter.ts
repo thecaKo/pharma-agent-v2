@@ -3,7 +3,7 @@ import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
-import { ReadOnlySqlError } from "./readonly-sql.js";
+import { ReadOnlySqlError, validateReadOnlySelect } from "./readonly-sql.js";
 import type {
   DatabaseColumn,
   DatabaseTable,
@@ -175,10 +175,87 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
-  public async describeTable(_tableName: string): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
-  public async listForeignKeys(_tableName?: string): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
-  public async sampleRows(_tableName: string, _limit: number): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
-  public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
+  public async describeTable(tableName: string): Promise<DatabaseColumn[]> {
+    return this.listColumns(tableName);
+  }
+
+  public async listForeignKeys(tableName?: string): Promise<ForeignKey[]> {
+    const connection = this.requireConnection("listColumns");
+    try {
+      const params: unknown[] = [];
+      let filter = "";
+      if (tableName !== undefined) {
+        const { schema, name } = splitQualifiedTable(tableName);
+        filter = "and tc.table_schema = $1 and tc.table_name = $2";
+        params.push(schema, name);
+      }
+      const result = await connection.query(
+        `
+          select tc.table_name as "fromTable",
+                 kcu.column_name as "fromColumn",
+                 ccu.table_name as "toTable",
+                 ccu.column_name as "toColumn",
+                 tc.constraint_name as "constraintName"
+          from information_schema.table_constraints tc
+          join information_schema.key_column_usage kcu
+            on kcu.constraint_name = tc.constraint_name
+           and kcu.table_schema = tc.table_schema
+          join information_schema.constraint_column_usage ccu
+            on ccu.constraint_name = tc.constraint_name
+           and ccu.table_schema = tc.table_schema
+          where tc.constraint_type = 'FOREIGN KEY'
+            ${filter}
+          order by tc.table_name, kcu.ordinal_position
+        `,
+        params
+      );
+      return normalizePostgresForeignKeys(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "postgresql",
+        operation: "listColumns",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async sampleRows(tableName: string, limit: number): Promise<SourceRow[]> {
+    const safeLimit = clampSampleLimit(limit);
+    const { schema, name } = splitQualifiedTable(tableName);
+    const safeTable = `${quotePgIdentifier(schema)}.${quotePgIdentifier(name)}`;
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(`select * from ${safeTable} limit ${safeLimit}`, []);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "postgresql",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async runReadOnlySelect(input: RunReadOnlySelectInput): Promise<SourceRow[]> {
+    const validated = validateReadOnlySelect(input.sql, { maxLimit: clampSampleLimit(input.limit) });
+    if (!validated.ok) {
+      throw new ReadOnlySqlError(validated.error);
+    }
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(validated.sql, []);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "postgresql",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
@@ -324,6 +401,26 @@ function readNullable(value: unknown): boolean | undefined {
   if (normalized === "yes") return true;
   if (normalized === "no") return false;
   return undefined;
+}
+
+function normalizePostgresForeignKeys(result: unknown): ForeignKey[] {
+  const rows = isRecord(result) && Array.isArray((result as { rows?: unknown }).rows)
+    ? ((result as { rows: unknown[] }).rows)
+    : [];
+  return rows.filter(isRecord).flatMap((row) => {
+    const fromTable = typeof row.fromTable === "string" ? row.fromTable : undefined;
+    const fromColumn = typeof row.fromColumn === "string" ? row.fromColumn : undefined;
+    const toTable = typeof row.toTable === "string" ? row.toTable : undefined;
+    const toColumn = typeof row.toColumn === "string" ? row.toColumn : undefined;
+    if (!fromTable || !fromColumn || !toTable || !toColumn) return [];
+    const constraintName = typeof row.constraintName === "string" ? row.constraintName : undefined;
+    return [{ fromTable, fromColumn, toTable, toColumn, ...(constraintName ? { constraintName } : {}) }];
+  });
+}
+
+function clampSampleLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit < 1) return 1;
+  return Math.min(Math.trunc(limit), 1000);
 }
 
 function notSupported(op: string): Error {
