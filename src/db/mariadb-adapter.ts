@@ -161,10 +161,80 @@ export class MariaDbSourceAdapter implements SourceDatabaseAdapter {
     }
   }
 
-  public async describeTable(_tableName: string): Promise<DatabaseColumn[]> { throw notSupported("describeTable"); }
-  public async listForeignKeys(_tableName?: string): Promise<ForeignKey[]> { throw notSupported("listForeignKeys"); }
-  public async sampleRows(_tableName: string, _limit: number): Promise<SourceRow[]> { throw notSupported("sampleRows"); }
-  public async runReadOnlySelect(_input: RunReadOnlySelectInput): Promise<SourceRow[]> { throw notSupported("runReadOnlySelect"); }
+  public async describeTable(tableName: string): Promise<DatabaseColumn[]> {
+    return this.listColumns(tableName);
+  }
+
+  public async listForeignKeys(tableName?: string): Promise<ForeignKey[]> {
+    const connection = this.requireConnection("listColumns");
+    try {
+      const params: unknown[] = [this.config.name];
+      let filter = "";
+      if (tableName !== undefined) {
+        filter = "and kcu.table_name = ?";
+        params.push(tableName);
+      }
+      const result = await connection.query(
+        `
+          select kcu.table_name as fromTable,
+                 kcu.column_name as fromColumn,
+                 kcu.referenced_table_name as toTable,
+                 kcu.referenced_column_name as toColumn,
+                 kcu.constraint_name as constraintName
+          from information_schema.key_column_usage kcu
+          where kcu.table_schema = ?
+            and kcu.referenced_table_name is not null
+            ${filter}
+          order by kcu.table_name, kcu.ordinal_position
+        `,
+        params
+      );
+      return normalizeForeignKeys(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "mariadb",
+        operation: "listColumns",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async sampleRows(tableName: string, limit: number): Promise<SourceRow[]> {
+    const safeLimit = clampSampleLimit(limit);
+    const safeTable = quoteMariaDbIdentifier(tableName);
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(`select * from ${safeTable} limit ${safeLimit}`, []);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "mariadb",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
+
+  public async runReadOnlySelect(input: RunReadOnlySelectInput): Promise<SourceRow[]> {
+    const validated = validateReadOnlySelect(input.sql, { maxLimit: clampSampleLimit(input.limit) });
+    if (!validated.ok) {
+      throw new ReadOnlySqlError(validated.error);
+    }
+    const connection = this.requireConnection();
+    try {
+      const result = await connection.query(validated.sql, []);
+      return normalizeRows(result);
+    } catch (error) {
+      throw normalizeDatabaseError({
+        driver: "mariadb",
+        operation: "query",
+        error,
+        secrets: this.secrets
+      });
+    }
+  }
 
   public async provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult> {
     const connection = this.requireConnection("provision");
@@ -320,6 +390,25 @@ function normalizeCursorParam(value: QueryChangesInput["cursor"]): unknown {
 
   const parsedAt = Date.parse(normalized);
   return Number.isNaN(parsedAt) ? normalized : new Date(parsedAt);
+}
+
+function normalizeForeignKeys(result: unknown): ForeignKey[] {
+  const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(isRecord).flatMap((row) => {
+    const fromTable = normalizeString(row.fromTable ?? row.TABLE_NAME);
+    const fromColumn = normalizeString(row.fromColumn ?? row.COLUMN_NAME);
+    const toTable = normalizeString(row.toTable ?? row.REFERENCED_TABLE_NAME);
+    const toColumn = normalizeString(row.toColumn ?? row.REFERENCED_COLUMN_NAME);
+    if (!fromTable || !fromColumn || !toTable || !toColumn) return [];
+    const constraintName = normalizeString(row.constraintName ?? row.CONSTRAINT_NAME);
+    return [{ fromTable, fromColumn, toTable, toColumn, ...(constraintName ? { constraintName } : {}) }];
+  });
+}
+
+function clampSampleLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit < 1) return 1;
+  return Math.min(Math.trunc(limit), 1000);
 }
 
 function notSupported(op: string): Error {
