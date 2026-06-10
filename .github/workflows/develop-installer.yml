@@ -67,20 +67,24 @@ jobs:
           npm run package:windows-installer
           ls -la installer/bin/Release/
 
-      - name: Publica release rolling develop-latest (tudo de bin/Release)
+      - name: Compacta bin/Release inteiro em PharmaAgentConnector.zip
+        shell: pwsh
+        run: Compress-Archive -Path installer/bin/Release/* -DestinationPath "$env:RUNNER_TEMP/PharmaAgentConnector.zip" -Force
+
+      - name: Publica release rolling develop-latest (zip com tudo de bin/Release)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=develop-latest
-          # Recria a release para os assets apontarem SEMPRE para o build mais
-          # novo, mantendo as mesmas URLs de download.
+          # Recria a release para o asset apontar SEMPRE para o build mais
+          # novo, mantendo a mesma URL de download.
           gh release delete "$tag" --yes || true
           git push origin ":refs/tags/$tag" || true
-          gh release create "$tag" installer/bin/Release/* \
+          gh release create "$tag" "$RUNNER_TEMP/PharmaAgentConnector.zip" \
             --prerelease \
             --title "Agente — develop (build ${GITHUB_RUN_NUMBER}, ${GITHUB_SHA:0:7})" \
-            --notes "Instalador MSI (autocontido, cab embutido) gerado automaticamente do último merge em \`develop\` (commit ${GITHUB_SHA}). Todos os arquivos de installer/bin/Release estão anexados. Gerado pelo workflow develop-installer."
+            --notes "Pacote de instalação do agente gerado automaticamente do último merge em \`develop\` (commit ${GITHUB_SHA}). O zip contém TODOS os arquivos de installer/bin/Release — extraia tudo na mesma pasta e execute o PharmaAgentConnector.msi. Gerado pelo workflow develop-installer."
 
       - name: Guarda bin/Release também como artifact do run
         uses: actions/upload-artifact@v4
