@@ -2,6 +2,12 @@
 # e publica/atualiza a release rolling `develop-latest`, mantendo a URL de
 # download estável:
 #   https://github.com/thecaKo/pharma-agent-v2/releases/download/develop-latest/PharmaAgentConnector.msi
+#
+# Pré-requisitos do empacotador supridos aqui:
+# - node.exe win x64  -> NODE_EXE_PATH (node do próprio runner windows)
+# - WinSW             -> installer/staging/PharmaAgentConnector.Service.exe (versionado no repo)
+# - node_modules prod -> NODE_MODULES_PATH (npm ci --omit=dev em diretório separado,
+#                        para não perder as devDeps de que o build precisa)
 name: develop-installer
 
 on:
@@ -31,33 +37,54 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Instala dependências
+      - name: Instala dependências (com devDeps, p/ build)
         run: npm ci
+
+      - name: Confere o WinSW versionado no repo
+        shell: bash
+        run: |
+          test -f installer/staging/PharmaAgentConnector.Service.exe || {
+            echo "::error::installer/staging/PharmaAgentConnector.Service.exe ausente no repo (WinSW x64)"; exit 1; }
+
+      - name: Prepara node_modules de produção (win x64)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/prod"
+          cp package.json package-lock.json "$RUNNER_TEMP/prod/"
+          cd "$RUNNER_TEMP/prod"
+          npm ci --omit=dev
 
       - name: Restaura extensões WiX
         run: dotnet restore installer/ConnectorPackage.wixproj
 
       - name: Gera o instalador (build + MSI)
-        run: npm run package:windows-installer
+        shell: bash
+        env:
+          NODE_MODULES_PATH: ${{ runner.temp }}\prod\node_modules
+        run: |
+          export NODE_EXE_PATH="$(node -e 'console.log(process.execPath)')"
+          echo "node.exe: $NODE_EXE_PATH"
+          npm run package:windows-installer
+          ls -la installer/bin/Release/
 
-      - name: Publica release rolling develop-latest
+      - name: Publica release rolling develop-latest (tudo de bin/Release)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=develop-latest
-          # Recria a release para o asset apontar SEMPRE para o build mais novo,
-          # mantendo a mesma URL de download.
+          # Recria a release para os assets apontarem SEMPRE para o build mais
+          # novo, mantendo as mesmas URLs de download.
           gh release delete "$tag" --yes || true
           git push origin ":refs/tags/$tag" || true
-          gh release create "$tag" installer/bin/Release/PharmaAgentConnector.msi \
+          gh release create "$tag" installer/bin/Release/* \
             --prerelease \
             --title "Agente — develop (build ${GITHUB_RUN_NUMBER}, ${GITHUB_SHA:0:7})" \
-            --notes "Instalador MSI gerado automaticamente do último merge em \`develop\` (commit ${GITHUB_SHA}). Gerado pelo workflow develop-installer."
+            --notes "Instalador MSI (autocontido, cab embutido) gerado automaticamente do último merge em \`develop\` (commit ${GITHUB_SHA}). Todos os arquivos de installer/bin/Release estão anexados. Gerado pelo workflow develop-installer."
 
-      - name: Guarda o MSI também como artifact do run
+      - name: Guarda bin/Release também como artifact do run
         uses: actions/upload-artifact@v4
         with:
-          name: PharmaAgentConnector-msi
-          path: installer/bin/Release/PharmaAgentConnector.msi
+          name: PharmaAgentConnector-release
+          path: installer/bin/Release/
           retention-days: 14
