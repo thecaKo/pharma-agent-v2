@@ -1,0 +1,63 @@
+# A cada merge em develop: gera o instalador MSI do agente (WiX v4 via .NET)
+# e publica/atualiza a release rolling `develop-latest`, mantendo a URL de
+# download estável:
+#   https://github.com/thecaKo/pharma-agent-v2/releases/download/develop-latest/PharmaAgentConnector.msi
+name: develop-installer
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: develop-installer
+  cancel-in-progress: true
+
+jobs:
+  build-msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Instala dependências
+        run: npm ci
+
+      - name: Restaura extensões WiX
+        run: dotnet restore installer/ConnectorPackage.wixproj
+
+      - name: Gera o instalador (build + MSI)
+        run: npm run package:windows-installer
+
+      - name: Publica release rolling develop-latest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=develop-latest
+          # Recria a release para o asset apontar SEMPRE para o build mais novo,
+          # mantendo a mesma URL de download.
+          gh release delete "$tag" --yes || true
+          git push origin ":refs/tags/$tag" || true
+          gh release create "$tag" installer/bin/Release/PharmaAgentConnector.msi \
+            --prerelease \
+            --title "Agente — develop (build ${GITHUB_RUN_NUMBER}, ${GITHUB_SHA:0:7})" \
+            --notes "Instalador MSI gerado automaticamente do último merge em \`develop\` (commit ${GITHUB_SHA}). Gerado pelo workflow develop-installer."
+
+      - name: Guarda o MSI também como artifact do run
+        uses: actions/upload-artifact@v4
+        with:
+          name: PharmaAgentConnector-msi
+          path: installer/bin/Release/PharmaAgentConnector.msi
+          retention-days: 14
