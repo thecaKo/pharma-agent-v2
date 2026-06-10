@@ -549,7 +549,7 @@ describe("mock panel CLI", () => {
       expect(message.mapping.incrementalQuery).toBe(incrementalQuery);
       expect(message.mapping.cursorField).toBe("row_id");
       expect(message.mapping.cursorType).toBe("number");
-      expect(message.mapping.batchSize).toBe(500);
+      expect(message.mapping.batchSize).toBe(88);
       expect(message.mapping.fields.sourceProductCode).toBe("cod");
       expect(message.mapping.fields.name).toBe("nm");
       expect(message.mapping.mappingVersion).toBe("local-onboarding-v1");

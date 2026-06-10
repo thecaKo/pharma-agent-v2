@@ -132,28 +132,31 @@ describe("transport protocol", () => {
       ).toThrow(new ProtocolParseError("mapping.fields.sourceProductCode must be a non-empty string"));
     });
 
-    it("rejects invalid mapping.cursorType with valid options in the message", () => {
+    // Contrato: o normalizador coage alias de banco e default benigno em NÚMEROS,
+    // mas cursorType DESCONHECIDO é deixado cru para o parse rejeitar — não se chuta
+    // a semântica timestamp×number, que corromperia o sync incremental em silêncio.
+    it("rejects unknown mapping.cursorType instead of defaulting to timestamp", () => {
       expect(parseConfigMessage({ cursorType: "uuid" })).toThrow(
         new ProtocolParseError('mapping.cursorType must be "timestamp" or "number", got "uuid"')
       );
     });
 
-    it("rejects non-positive mapping.pollIntervalMs with a field-specific message", () => {
-      expect(parseConfigMessage({ pollIntervalMs: 0 })).toThrow(
-        new ProtocolParseError("mapping.pollIntervalMs must be a positive integer")
-      );
-      expect(parseConfigMessage({ pollIntervalMs: -1 })).toThrow(
-        new ProtocolParseError("mapping.pollIntervalMs must be a positive integer")
-      );
+    it("sanitizes non-positive mapping.pollIntervalMs to the catalog default", () => {
+      expect(parseConfigMessage({ pollIntervalMs: 0 })()).toMatchObject({
+        mapping: { pollIntervalMs: 10_000 }
+      });
+      expect(parseConfigMessage({ pollIntervalMs: -1 })()).toMatchObject({
+        mapping: { pollIntervalMs: 10_000 }
+      });
     });
 
-    it("rejects non-positive mapping.batchSize with a field-specific message", () => {
-      expect(parseConfigMessage({ batchSize: 0 })).toThrow(
-        new ProtocolParseError("mapping.batchSize must be a positive integer")
-      );
-      expect(parseConfigMessage({ batchSize: -5 })).toThrow(
-        new ProtocolParseError("mapping.batchSize must be a positive integer")
-      );
+    it("sanitizes non-positive mapping.batchSize to the catalog default", () => {
+      expect(parseConfigMessage({ batchSize: 0 })()).toMatchObject({
+        mapping: { batchSize: 500 }
+      });
+      expect(parseConfigMessage({ batchSize: -5 })()).toMatchObject({
+        mapping: { batchSize: 500 }
+      });
     });
 
     it("accepts optional selectedProductTable, product fields, and sentAt when required fields are valid", () => {

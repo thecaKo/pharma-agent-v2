@@ -85,7 +85,9 @@ export function normalizeCatalogConfigPushMessage(message: Record<string, unknow
       batchSize: normalizeRuntimeNumber(catalogMapping.batchSize, CATALOG_BATCH_SIZE),
       incrementalQuery,
       cursorField,
-      cursorType,
+      // Ausente vira undefined; só inclui a chave quando há valor (alias coagido,
+      // válido ou lixo cru a ser rejeitado pelo validate).
+      ...(cursorType !== undefined ? { cursorType } : {}),
       snapshotQuery,
       snapshotPageSize,
       fields
@@ -95,15 +97,34 @@ export function normalizeCatalogConfigPushMessage(message: Record<string, unknow
 
 function normalizeFlatConnectorConfigMessage(message: Record<string, unknown>): Record<string, unknown> {
   const mapping = message.mapping as Record<string, unknown>;
+  const syncMode = resolveSyncMode({}, mapping);
+  const normalizedMapping: Record<string, unknown> = {
+    ...mapping,
+    syncMode,
+    pollIntervalMs: normalizeRuntimeNumber(mapping.pollIntervalMs, CATALOG_POLL_INTERVAL_MS),
+    batchSize: normalizeRuntimeNumber(mapping.batchSize, CATALOG_BATCH_SIZE),
+    snapshotPageSize: normalizeRuntimeNumber(mapping.snapshotPageSize, CATALOG_BATCH_SIZE)
+  };
+
+  if (syncMode === "snapshot") {
+    // O validador rejeita cursorType/cursorField presentes em snapshot.
+    delete normalizedMapping.cursorType;
+    delete normalizedMapping.cursorField;
+  } else {
+    // Incremental: mesmo contrato do caminho config-wrapped — coage alias de banco
+    // (updated_at/composite→timestamp, incrementing→number), preserva válido e deixa
+    // lixo cru passar para o validate rejeitar. Não inventa default na ausência.
+    const cursorType = resolveCursorType({}, mapping);
+    if (cursorType !== undefined) {
+      normalizedMapping.cursorType = cursorType;
+    } else {
+      delete normalizedMapping.cursorType;
+    }
+  }
+
   return {
     ...message,
-    mapping: {
-      ...mapping,
-      syncMode: resolveSyncMode({}, mapping),
-      pollIntervalMs: normalizeRuntimeNumber(mapping.pollIntervalMs, CATALOG_POLL_INTERVAL_MS),
-      batchSize: normalizeRuntimeNumber(mapping.batchSize, CATALOG_BATCH_SIZE),
-      snapshotPageSize: normalizeRuntimeNumber(mapping.snapshotPageSize, CATALOG_BATCH_SIZE)
-    }
+    mapping: normalizedMapping
   };
 }
 
@@ -113,10 +134,12 @@ function resolveSyncMode(catalog: Record<string, unknown>, catalogMapping: Recor
 }
 
 function normalizeRuntimeNumber(value: unknown, normalizedValue: number): unknown {
-  if (value === undefined || (Number.isInteger(value) && (value as number) > 0)) {
-    return normalizedValue;
+  // Inteiro positivo válido é preservado; ausente ou inválido (null, 0, negativo,
+  // float, string) cai no default.
+  if (Number.isInteger(value) && (value as number) > 0) {
+    return value;
   }
-  return value;
+  return normalizedValue;
 }
 
 function readCatalogFields(value: unknown): Record<string, string> {
@@ -173,22 +196,33 @@ function resolveCursorField(input: {
   return "";
 }
 
-function resolveCursorType(catalog: Record<string, unknown>, catalogMapping: Record<string, unknown>): CursorType {
-  const raw =
-    readNonEmptyString(catalog.cursorType) ??
-    readNonEmptyString(catalogMapping.cursorType) ??
-    "";
+function resolveCursorType(
+  catalog: Record<string, unknown>,
+  catalogMapping: Record<string, unknown>
+): string | undefined {
+  const raw = readNonEmptyString(catalog.cursorType) ?? readNonEmptyString(catalogMapping.cursorType);
 
-  if (AGENT_CURSOR_TYPES.has(raw)) {
-    return raw as CursorType;
+  // Ausente: não inventa default. Em incremental o validate já rejeita a ausência;
+  // em snapshot o cursorType é removido a montante.
+  if (raw === undefined) {
+    return undefined;
   }
 
+  // Já no vocabulário do agente: passa inalterado.
+  if (AGENT_CURSOR_TYPES.has(raw)) {
+    return raw;
+  }
+
+  // Alias de banco conhecido: coage para o vocabulário do agente.
   const mapped = CATALOG_CURSOR_TYPE_TO_AGENT[raw];
   if (mapped) {
     return mapped;
   }
 
-  return "timestamp";
+  // Desconhecido/lixo (ex.: "timestamptz", "uuid"): deixa cru para o validate a
+  // jusante rejeitar e o agente emitir connector.error — não chuta a semântica do
+  // cursor (timestamp×number), o que corromperia o sync incremental em silêncio.
+  return raw;
 }
 
 function parseCursorFieldFromIncrementalQuery(sql: string): string | undefined {
