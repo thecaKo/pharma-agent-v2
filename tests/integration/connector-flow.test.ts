@@ -59,11 +59,6 @@ describe("connector runtime flow", () => {
         return mapping;
       },
       expectedMessage: "mapping.fields.sourceProductCode must be a non-empty string"
-    },
-    {
-      case: "invalid mapping.cursorType",
-      buildMapping: () => validMapping({ cursorType: "uuid" as "timestamp" }),
-      expectedMessage: 'mapping.cursorType must be "timestamp" or "number", got "uuid"'
     }
   ])(
     "rejects invalid connector.config ($case) with connector.error and no activation",
@@ -105,6 +100,35 @@ describe("connector runtime flow", () => {
       expect(productBatch).toBe("timeout");
     }
   );
+
+  it("rejects an unknown mapping.cursorType with connector.error and no activation", async () => {
+    const adapter = adapterWithRows([
+      {
+        product_id: "P-001",
+        description: "Dipirona 500mg",
+        sale_price: "12.50",
+        quantity: "7",
+        updated_at: "2026-05-16T20:00:01.000Z"
+      }
+    ]);
+    runtime = createRuntime({ adapter });
+    await runtime.start();
+
+    // cursorType lixo NÃO é saneado: é rejeitado com connector.error, surfaçando o bug
+    // upstream em vez de chutar timestamp×number e corromper o sync incremental.
+    server.sendJson(configMessage(validMapping({ cursorType: "uuid" as "timestamp" })));
+
+    const errorMessage = await nextConnectorError(server);
+    expect(errorMessage.parsed).toMatchObject({
+      type: "connector.error",
+      error: {
+        errorCode: CONFIG_VALIDATION_FAILED_ERROR_CODE,
+        message: 'mapping.cursorType must be "timestamp" or "number", got "uuid"'
+      }
+    });
+    expect(runtime.getState().activeMapping).toBeUndefined();
+    expect(adapter.queryChanges).not.toHaveBeenCalled();
+  });
 
   it("activates after a prior invalid connector.config push when a valid config arrives", async () => {
     const adapter = adapterWithRows([

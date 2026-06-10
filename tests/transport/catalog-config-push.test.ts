@@ -12,8 +12,11 @@ describe("catalog config push normalization", () => {
       mapping: {
         ...(push.mapping as Record<string, unknown>),
         syncMode: "incremental",
-        pollIntervalMs: 10_000,
-        batchSize: 500,
+        // valores válidos do helper (10/100) são preservados; o default só
+        // entra quando o campo está ausente ou inválido.
+        pollIntervalMs: 10,
+        batchSize: 100,
+        cursorType: "timestamp",
         snapshotPageSize: 500
       }
     });
@@ -29,8 +32,8 @@ describe("catalog config push normalization", () => {
       mapping: {
         mappingVersion: "mv-api-1",
         selectedProductTable: "products",
-        pollIntervalMs: 10_000,
-        batchSize: 500,
+        pollIntervalMs: 10,
+        batchSize: 100,
         cursorField: "updated_at",
         cursorType: "timestamp",
         fields: {
@@ -84,10 +87,11 @@ LIMIT ?`,
       mapping: {
         mappingVersion: "mv-legacy-1",
         selectedProductTable: "products",
-        pollIntervalMs: 10_000,
-        batchSize: 500,
+        pollIntervalMs: 10,
+        batchSize: 100,
         cursorField: "sourceProductUpdatedAt",
-        cursorType: "timestamp",
+        // cursorType ausente NÃO é fabricado: o normalizador o omite e o validate a
+        // jusante rejeita a ausência em incremental (contrato "não inventa default").
         fields: {
           sourceProductCode: "sourceProductCode",
           name: "sourceProductName",
@@ -97,6 +101,7 @@ LIMIT ?`,
         }
       }
     });
+    expect(normalized.mapping).not.toHaveProperty("cursorType");
   });
 
   it("maps catalog cursorType updated_at to agent timestamp in nested envelope", () => {
@@ -164,6 +169,91 @@ LIMIT ?`,
         batchSize: 500,
         snapshotPageSize: 500
       }
+    });
+  });
+
+  it("maps flat cursorType updated_at to agent timestamp", () => {
+    const push = neoApiCatalogConfigPush();
+    (push.mapping as Record<string, unknown>).cursorType = "updated_at";
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({ cursorType: "timestamp" });
+  });
+
+  it("leaves unknown flat cursorType raw for the validator to reject", () => {
+    const push = neoApiCatalogConfigPush();
+    (push.mapping as Record<string, unknown>).cursorType = "timestamptz";
+
+    // Lixo desconhecido NÃO é saneado para um default: permanece cru para o
+    // validate a jusante rejeitar (não se chuta a semântica timestamp×number).
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({ cursorType: "timestamptz" });
+  });
+
+  it("maps flat cursorType incrementing to agent number", () => {
+    const push = neoApiCatalogConfigPush();
+    (push.mapping as Record<string, unknown>).cursorType = "incrementing";
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({ cursorType: "number" });
+  });
+
+  it("removes cursorType and cursorField from flat snapshot mapping", () => {
+    const push = neoApiCatalogConfigPush();
+    const mapping = push.mapping as Record<string, unknown>;
+    mapping.syncMode = "snapshot";
+    mapping.snapshotQuery = "select * from `products` order by `id` limit ? offset ?";
+    mapping.snapshotPageSize = 500;
+    mapping.cursorType = "updated_at";
+    mapping.cursorField = "updated_at";
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    const normalizedMapping = normalized.mapping as Record<string, unknown>;
+    expect(normalizedMapping.syncMode).toBe("snapshot");
+    expect(normalizedMapping).not.toHaveProperty("cursorType");
+    expect(normalizedMapping).not.toHaveProperty("cursorField");
+  });
+
+  it("keeps cursorField and normalizes cursorType in flat incremental mapping", () => {
+    const push = neoApiCatalogConfigPush();
+    const mapping = push.mapping as Record<string, unknown>;
+    mapping.cursorField = "updated_at";
+    mapping.cursorType = "composite";
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({
+      syncMode: "incremental",
+      cursorField: "updated_at",
+      cursorType: "timestamp"
+    });
+  });
+
+  it.each([
+    ["zero", 0],
+    ["null", null],
+    ["string", "100"],
+    ["float", 3.5],
+    ["negative", -1]
+  ])("defaults invalid flat snapshotPageSize (%s) to 500", (_label, invalid) => {
+    const push = neoApiCatalogConfigPush();
+    (push.mapping as Record<string, unknown>).snapshotPageSize = invalid;
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({ snapshotPageSize: 500 });
+  });
+
+  it("preserves valid flat runtime numbers instead of replacing with defaults", () => {
+    const push = neoApiCatalogConfigPush();
+    const mapping = push.mapping as Record<string, unknown>;
+    mapping.snapshotPageSize = 250;
+    mapping.pollIntervalMs = 60_000;
+    mapping.batchSize = 1_000;
+
+    const normalized = normalizeCatalogConfigPushMessage(push);
+    expect(normalized.mapping).toMatchObject({
+      snapshotPageSize: 250,
+      pollIntervalMs: 60_000,
+      batchSize: 1_000
     });
   });
 

@@ -44,7 +44,7 @@ describe("WebSocketTransportClient", () => {
     expect(logs.join("\n")).not.toContain("connector-token-secret");
   });
 
-  it("sends connector.error for malformed connector.config with invalid mapping.cursorType", async () => {
+  it("sends connector.error for unknown mapping.cursorType instead of sanitizing it", async () => {
     client = createClient("connector-token-secret");
     let configCount = 0;
     client.on("config", () => {
@@ -61,8 +61,9 @@ describe("WebSocketTransportClient", () => {
       mapping: validMapping({ cursorType: "uuid" as "timestamp" })
     });
 
+    // Contrato: cursorType desconhecido não é saneado para um default — é rejeitado
+    // com connector.error, surfaçando o bug upstream em vez de chutar a semântica.
     const message = await server.nextMessage();
-
     expect(message.parsed).toMatchObject({
       type: "connector.error",
       error: {
