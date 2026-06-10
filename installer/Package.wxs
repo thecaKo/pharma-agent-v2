@@ -8,7 +8,9 @@
            UpgradeCode="$(var.UpgradeCode)"
            Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
-    <MediaTemplate />
+    <!-- Cab embutido: o MSI sai autocontido (um único arquivo instala tudo),
+         sem depender dos .cab vizinhos em installer/bin/Release. -->
+    <MediaTemplate EmbedCab="yes" />
 
     <Feature Id="ConnectorFeature" Title="Pharma Agent Connector" Level="1">
       <ComponentGroupRef Id="ConnectorApplicationFiles" />
