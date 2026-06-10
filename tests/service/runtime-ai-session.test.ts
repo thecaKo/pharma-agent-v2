@@ -33,6 +33,22 @@ describe("ai-session-wiring", () => {
     expect(adapter.runReadOnlySelect).toHaveBeenCalledWith({ sql: "SELECT codigo FROM produtos", limit: 10 });
   });
 
+  it("buildRuntimeAdminDeps usa o adapter para schema.listTables (não o stub vazio das probeDeps)", async () => {
+    const adapter = fakeAdapter();
+    const deps = buildRuntimeAdminDeps({
+      getAdapter: async () => adapter,
+      fs: { readFile: vi.fn(async () => ""), listDir: vi.fn(async () => []), stat: vi.fn(async () => undefined), enumerateTop: vi.fn(async () => []) },
+      registry: { listKeys: vi.fn(async () => []), readKey: vi.fn(async () => ({})) },
+      // probeDeps inclui o stub vazio (como no runtime real); ele NÃO pode vencer.
+      probeDeps: { schemaListTables: vi.fn(async () => []) } as never
+    });
+
+    const tables = await deps.schemaListTables();
+
+    expect(adapter.listTables).toHaveBeenCalled();
+    expect(tables).toEqual(["produtos"]);
+  });
+
   it("buildAiSessionDeps.applyApproval persiste credenciais e ativa mapping", async () => {
     const writeDatabaseConfig = vi.fn(async () => undefined);
     const activateMapping = vi.fn(async () => undefined);

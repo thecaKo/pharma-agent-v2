@@ -16,6 +16,7 @@ import type { DatabaseColumn, ForeignKey } from "../db/source-adapter.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { ReadConfigFileResult } from "./read-config-file.js";
 import type { ReadRegistryKeyResult } from "./read-registry-key.js";
+import type { FsListDirResult, FsReadFileResult, FsStatResult } from "./fs-primitives.js";
 
 const PROBE_VERSION = "1";
 
@@ -33,6 +34,9 @@ export interface AdminRouterDependencies {
   schemaSampleRows: (table: string, limit: number) => Promise<SourceRow[]>;
   sqlRunReadOnlySelect: (input: { sql: string; limit: number }) => Promise<SourceRow[]>;
   fsReadConfigFile: (input: { path: string }) => Promise<ReadConfigFileResult>;
+  fsListDir: (input: { path: string }) => Promise<FsListDirResult>;
+  fsReadFile: (input: { path: string; maxBytes?: number }) => Promise<FsReadFileResult>;
+  fsStat: (input: { path: string }) => Promise<FsStatResult>;
   registryReadKey: (input: { path: string }) => Promise<ReadRegistryKeyResult>;
 }
 
@@ -110,6 +114,24 @@ export async function handleAdminRequest(
         const result = await deps.fsReadConfigFile({ path: parsed.value });
         return success(req, result);
       }
+      case "fs.listDir": {
+        const parsed = validatePathInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.fsListDir({ path: parsed.value });
+        return result.ok ? success(req, result.payload) : failure(req, result.errorCode);
+      }
+      case "fs.readFile": {
+        const parsed = validateReadFileInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.fsReadFile(parsed.value);
+        return result.ok ? success(req, result.payload) : failure(req, result.errorCode);
+      }
+      case "fs.stat": {
+        const parsed = validatePathInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.fsStat({ path: parsed.value });
+        return result.ok ? success(req, result.payload) : failure(req, result.errorCode);
+      }
       case "registry.readKey": {
         const parsed = validatePathInput(req.input);
         if (!parsed.ok) return invalidInput(req, parsed.error);
@@ -147,6 +169,15 @@ function invalidInput(req: AdminRequestMessage, message: string): AdminResponseM
     command: req.command,
     errorCode: "INVALID_INPUT",
     message
+  });
+}
+
+function failure(req: AdminRequestMessage, errorCode: string): AdminResponseMessage {
+  return buildAdminErrorResponseMessage({
+    requestId: req.requestId,
+    command: req.command,
+    errorCode,
+    message: errorCode
   });
 }
 
@@ -238,6 +269,20 @@ function validatePathInput(input: unknown): Validated<string> {
     return { ok: false, error: "input.path must be a non-empty string" };
   }
   return { ok: true, value: input.path.trim() };
+}
+
+function validateReadFileInput(input: unknown): Validated<{ path: string; maxBytes?: number }> {
+  const parsed = validatePathInput(input);
+  if (!parsed.ok) return parsed;
+  const record = input as Record<string, unknown>;
+  const out: { path: string; maxBytes?: number } = { path: parsed.value };
+  if (record.maxBytes !== undefined) {
+    if (typeof record.maxBytes !== "number" || !Number.isInteger(record.maxBytes) || record.maxBytes < 1) {
+      return { ok: false, error: "input.maxBytes must be a positive integer" };
+    }
+    out.maxBytes = record.maxBytes;
+  }
+  return { ok: true, value: out };
 }
 
 function validateScanConfigDirsInput(input: unknown): Validated<ScanConfigDirsInput> {

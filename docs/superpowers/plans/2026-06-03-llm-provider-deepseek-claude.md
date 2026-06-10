@@ -1042,13 +1042,31 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `src/modules/ai-setup/services/ai-setup-orchestrator.service.ts`
 - Modify: `src/modules/ai-setup/services/ai-setup-orchestrator.service.test.ts`
 
-- [ ] **Step 1: Reescrever o teste (mock neutro + novos comportamentos)**
+> **⚠️ NOTA DE RECONCILIAÇÃO (provisionamento read-only):**
+> Este plano foi escrito ANTES da feature de **provisionamento de usuário read-only**
+> ser mergeada nesta mesma branch. Essa feature ALTEROU o orquestrador, o módulo e o
+> int test. O refactor para tipos neutros **NÃO pode apagar** a lógica de provisionamento.
+> Concretamente, esta task DEVE preservar:
+> - a **4ª/6ª dependência** `AiSetupProvisioningService` no construtor;
+> - o campo `engine?: string` em `IRunSessionInput`;
+> - os imports de `AI_SESSION_STATE_MESSAGE_TYPE`, `PROPOSE_READONLY_USER_TOOL_NAME`,
+>   `IProvisionSignalToolResult` e `AiSetupProvisioningService`;
+> - a **interceptação** `if (call.name === PROPOSE_READONLY_USER_TOOL_NAME)` dentro do
+>   loop, ANTES do branch genérico `bridge.invokeTool`;
+> - o método `handleProposeReadonlyUser` IDÊNTICO ao atual (emite fase `provisioning`,
+>   chama `provisioning.proposeAndAwait`, e emite fase `schema`/`discovering` conforme a
+>   decisão). Ele NÃO muda com tipos neutros — só o transporte do resultado da tool
+>   passa de `tool_result` (Anthropic) para a mensagem neutra `role:'tool'`.
+> O código e os testes abaixo já incorporam essa preservação.
+
+- [ ] **Step 1: Reescrever o teste (mock neutro + novos comportamentos + provisionamento)**
 
 ```ts
 // src/modules/ai-setup/services/ai-setup-orchestrator.service.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { InternalException } from '@/common/exceptions/app.exception';
+import { PROPOSE_READONLY_USER_TOOL_NAME } from '../constants/ai-setup-provisioning.constants';
 import type { IToolDescriptor } from '../interfaces/ai-setup-protocol.interface';
 import type { LlmTurn } from '../interfaces/llm-client.interface';
 import { AiSetupOrchestratorService } from './ai-setup-orchestrator.service';
@@ -1081,18 +1099,25 @@ function endTurn(): LlmTurn {
 
 describe(`Teste Unitário: ${SUT}`, () => {
   let llm: { createTurn: ReturnType<typeof vi.fn> };
-  let bridge: { invokeTool: ReturnType<typeof vi.fn>; emitMappingProposed: ReturnType<typeof vi.fn> };
+  let bridge: {
+    invokeTool: ReturnType<typeof vi.fn>;
+    emitMappingProposed: ReturnType<typeof vi.fn>;
+    emitSessionState: ReturnType<typeof vi.fn>;
+  };
+  let provisioning: { proposeAndAwait: ReturnType<typeof vi.fn> };
   let service: AiSetupOrchestratorService;
 
   beforeEach(() => {
     llm = { createTurn: vi.fn() };
-    bridge = { invokeTool: vi.fn(), emitMappingProposed: vi.fn() };
+    bridge = { invokeTool: vi.fn(), emitMappingProposed: vi.fn(), emitSessionState: vi.fn() };
+    provisioning = { proposeAndAwait: vi.fn() };
     service = new AiSetupOrchestratorService(
       llm as never,
       'deepseek-v4-flash',
       8192,
       bridge as never,
       new CatalogToToolsTranslator(),
+      provisioning as never,
     );
   });
   afterEach(() => vi.clearAllMocks());
@@ -1173,8 +1198,96 @@ describe(`Teste Unitário: ${SUT}`, () => {
     await expect(promise).rejects.toThrow(/timeout de sessão/i);
     nowSpy.mockRestore();
   });
+
+  it('propose_readonly_user provisionado: chama proposeAndAwait e emite fase provisioning→schema', async () => {
+    llm.createTurn
+      .mockResolvedValueOnce(
+        toolCallTurn('propose_readonly_user', { username: 'ro_user', rationale: 'sem acesso' }, 'p1'),
+      )
+      .mockResolvedValueOnce(
+        toolCallTurn('emit_mapping', { mapping: VALID_MAPPING, rationale: 'JOIN', previewRows: [] }, 'c2'),
+      );
+    provisioning.proposeAndAwait.mockResolvedValueOnce({
+      provisioned: true,
+      activeCredential: 'readonly_user',
+      username: 'ro_user',
+    });
+
+    await service.runSession({
+      companyId: 7,
+      connectorId: 'conn-1',
+      sessionId: 's1',
+      catalog: CATALOG,
+      engine: 'postgres',
+    });
+
+    expect(provisioning.proposeAndAwait).toHaveBeenCalledWith({
+      connectorId: 'conn-1',
+      sessionId: 's1',
+      username: 'ro_user',
+      engine: 'postgres',
+      rationale: 'sem acesso',
+    });
+    // Fase 'provisioning' antes da decisão; 'schema' após provisionar.
+    expect(bridge.emitSessionState).toHaveBeenNthCalledWith(1, 'conn-1', {
+      type: AI_SESSION_STATE_MESSAGE_TYPE,
+      sessionId: 's1',
+      phase: 'provisioning',
+    });
+    expect(bridge.emitSessionState).toHaveBeenNthCalledWith(2, 'conn-1', {
+      type: AI_SESSION_STATE_MESSAGE_TYPE,
+      sessionId: 's1',
+      phase: 'schema',
+    });
+    // O sinal volta ao loop como mensagem neutra role:'tool'.
+    const secondMessages = llm.createTurn.mock.calls[1][0].messages;
+    const toolMsg = secondMessages.find(
+      (m: { role: string; toolCallId?: string }) => m.role === 'tool' && m.toolCallId === 'p1',
+    );
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg.content).toContain('readonly_user');
+    // propose_readonly_user NÃO vai ao bridge.invokeTool.
+    expect(bridge.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it('propose_readonly_user não provisionado: emite fase provisioning→discovering', async () => {
+    llm.createTurn
+      .mockResolvedValueOnce(toolCallTurn('propose_readonly_user', { username: 'ro_user' }, 'p1'))
+      .mockResolvedValueOnce(
+        toolCallTurn('emit_mapping', { mapping: VALID_MAPPING, rationale: 'JOIN', previewRows: [] }, 'c2'),
+      );
+    provisioning.proposeAndAwait.mockResolvedValueOnce({
+      provisioned: false,
+      activeCredential: 'discovered',
+      reason: 'rejected',
+    });
+
+    await service.runSession({
+      companyId: 7,
+      connectorId: 'conn-1',
+      sessionId: 's1',
+      catalog: CATALOG,
+      engine: 'postgres',
+    });
+
+    expect(provisioning.proposeAndAwait).toHaveBeenCalledTimes(1);
+    expect(bridge.emitSessionState).toHaveBeenNthCalledWith(2, 'conn-1', {
+      type: AI_SESSION_STATE_MESSAGE_TYPE,
+      sessionId: 's1',
+      phase: 'discovering',
+    });
+  });
 });
 ```
+
+> O teste importa `PROPOSE_READONLY_USER_TOOL_NAME` real (usado implicitamente via
+> `toolCallTurn('propose_readonly_user', ...)` — o nome literal É o valor da constante) e
+> `AI_SESSION_STATE_MESSAGE_TYPE` para casar os payloads de `emitSessionState`. Adicione o
+> import no topo do arquivo de teste:
+>
+> ```ts
+> import { AI_SESSION_STATE_MESSAGE_TYPE } from '../constants/ai-setup-protocol.constants';
+> ```
 
 - [ ] **Step 2: Rodar e ver falhar**
 
@@ -1196,7 +1309,10 @@ import {
   AI_SESSION_TIMEOUT_MS,
   AI_SETUP_SYSTEM_PROMPT,
 } from '../constants/ai-setup-orchestrator.constants';
+import { AI_SESSION_STATE_MESSAGE_TYPE } from '../constants/ai-setup-protocol.constants';
+import { PROPOSE_READONLY_USER_TOOL_NAME } from '../constants/ai-setup-provisioning.constants';
 import { AiSessionConnectorBridge } from '../gateways/ai-session-connector-bridge';
+import type { IProvisionSignalToolResult } from '../interfaces/ai-setup-provisioning.interface';
 import type { IToolDescriptor } from '../interfaces/ai-setup-protocol.interface';
 import {
   LLM_CLIENT,
@@ -1206,6 +1322,7 @@ import {
   type LlmMessage,
   type LlmToolDef,
 } from '../interfaces/llm-client.interface';
+import { AiSetupProvisioningService } from './ai-setup-provisioning.service';
 import { CatalogToToolsTranslator } from './catalog-to-tools.translator';
 import { validateCatalogMapping } from './validate-catalog-mapping';
 
@@ -1217,6 +1334,7 @@ export interface IRunSessionInput {
   connectorId: string;
   sessionId: string;
   catalog: IToolDescriptor[];
+  engine?: string;
 }
 
 export interface IRunSessionGuards {
@@ -1247,6 +1365,7 @@ export class AiSetupOrchestratorService {
     @Inject(LLM_MAX_TOKENS) private readonly maxTokens: number,
     private readonly bridge: AiSessionConnectorBridge,
     private readonly translator: CatalogToToolsTranslator,
+    private readonly provisioning: AiSetupProvisioningService,
   ) {}
 
   async runSession(input: IRunSessionInput, guards: IRunSessionGuards = {}): Promise<void> {
@@ -1295,6 +1414,22 @@ export class AiSetupOrchestratorService {
         }
         invocations += 1;
 
+        // Interceptação do sinal de provisionamento (NÃO vai ao bridge.invokeTool):
+        // pausa o loop, propõe ao painel e aguarda a decisão; o resultado volta
+        // como mensagem neutra role:'tool'.
+        if (call.name === PROPOSE_READONLY_USER_TOOL_NAME) {
+          const signalResult = await this.handleProposeReadonlyUser(
+            input,
+            call.arguments as Record<string, unknown>,
+          );
+          messages.push({
+            role: 'tool',
+            toolCallId: call.id,
+            content: JSON.stringify(signalResult),
+          });
+          continue;
+        }
+
         const result = await this.bridge.invokeTool(input.connectorId, input.sessionId, call.name, call.arguments);
 
         messages.push({
@@ -1304,6 +1439,51 @@ export class AiSetupOrchestratorService {
         });
       }
     }
+  }
+
+  private async handleProposeReadonlyUser(
+    input: IRunSessionInput,
+    toolInput: Record<string, unknown>,
+  ): Promise<IProvisionSignalToolResult> {
+    const username = typeof toolInput.username === 'string' ? toolInput.username : '';
+    const rationale = typeof toolInput.rationale === 'string' ? toolInput.rationale : undefined;
+    const engine = input.engine ?? 'unknown';
+
+    // Fase 'provisioning' (entre credentials e schema).
+    this.bridge.emitSessionState(input.connectorId, {
+      type: AI_SESSION_STATE_MESSAGE_TYPE,
+      sessionId: input.sessionId,
+      phase: 'provisioning',
+    });
+
+    logger.info(
+      {
+        module: MODULE,
+        action: 'ai_setup_provision_proposed',
+        sessionId: input.sessionId,
+        username,
+      },
+      'Sinal propose_readonly_user recebido; pausando o loop até a decisão',
+    );
+
+    const signalResult = await this.provisioning.proposeAndAwait({
+      connectorId: input.connectorId,
+      sessionId: input.sessionId,
+      username,
+      engine,
+      ...(rationale === undefined ? {} : { rationale }),
+    });
+
+    // Sai da fase 'provisioning' após a decisão: provisionado segue para o
+    // schema; sem provisão (reject/fallback/erro) volta à descoberta e segue
+    // a inspeção com a credencial descoberta.
+    this.bridge.emitSessionState(input.connectorId, {
+      type: AI_SESSION_STATE_MESSAGE_TYPE,
+      sessionId: input.sessionId,
+      phase: signalResult.provisioned ? 'schema' : 'discovering',
+    });
+
+    return signalResult;
   }
 
   private emitMapping(input: IRunSessionInput, emitArgs: unknown): void {
@@ -1334,13 +1514,13 @@ export class AiSetupOrchestratorService {
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `pnpm run vitest:unit src/modules/ai-setup/services/ai-setup-orchestrator.service.test.ts`
-Expected: PASS (6 testes).
+Expected: PASS (8 testes — 6 neutros + 2 de provisionamento).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/modules/ai-setup/services/ai-setup-orchestrator.service.ts src/modules/ai-setup/services/ai-setup-orchestrator.service.test.ts
-git commit -m "refactor(ai-setup): loop agentic neutro + valida emit_mapping e falha sem mapping
+git commit -m "refactor(ai-setup): loop agentic neutro preservando provisionamento read-only
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -1393,7 +1573,12 @@ Expected: FAIL — `llmClientProviders` não exportado.
 
 - [ ] **Step 3: Editar o módulo**
 
-Substitua os imports e a lista de providers do `AnthropicMessagesClient`. O arquivo passa a:
+Troque **apenas** o wiring do LLM: remova o `AnthropicMessagesClient` e o provider
+`{ provide: ANTHROPIC_MESSAGES_CLIENT, useExisting: ... }`, e adicione `...llmClientProviders`.
+**PRESERVE** todos os demais providers existentes — em especial `AiSetupProvisioningService`,
+que a feature de provisionamento read-only adicionou e que o orquestrador agora resolve por
+DI (6ª dependência). NestJS injeta o `AiSetupProvisioningService` por tipo (classe), então
+basta mantê-lo na lista. O arquivo passa a:
 
 ```ts
 // src/modules/ai-setup/ai-setup.module.ts
@@ -1411,6 +1596,7 @@ import { AI_SETUP_MAX_TOKENS, AI_SETUP_MAX_TOKENS_ENV } from './constants/ai-set
 import { LLM_CLIENT, LLM_MAX_TOKENS, LLM_MODEL } from './interfaces/llm-client.interface';
 import { AiSetupFacade } from './services/ai-setup.facade';
 import { AiSetupOrchestratorService } from './services/ai-setup-orchestrator.service';
+import { AiSetupProvisioningService } from './services/ai-setup-provisioning.service';
 import { AiSetupSessionRegistry } from './services/ai-setup-session.registry';
 import { CatalogToToolsTranslator } from './services/catalog-to-tools.translator';
 import { createLlmClient, resolveLlmModel } from './services/llm-client.factory';
@@ -1433,6 +1619,7 @@ export const llmClientProviders: Provider[] = [
     CatalogToToolsTranslator,
     AiSetupSessionRegistry,
     AiSetupOrchestratorService,
+    AiSetupProvisioningService,
     AiSetupFacade,
     AiSetupGateway,
     AiSetupWiring,
@@ -1442,6 +1629,13 @@ export const llmClientProviders: Provider[] = [
 })
 export class AiSetupModule {}
 ```
+
+> **Reconciliação (provisionamento):** `AiSetupProvisioningService` PERMANECE na lista de
+> providers — não é um símbolo do LLM e não deve ser removido junto do client antigo. O
+> orquestrador agora tem 6 deps (`LLM_CLIENT` + `LLM_MODEL` + `LLM_MAX_TOKENS` via tokens,
+> `AiSessionConnectorBridge` + `CatalogToToolsTranslator` + `AiSetupProvisioningService` por
+> tipo). O teste do módulo (Step 1) cobre só o wiring do LLM; o wiring do provisioning é
+> coberto pelo int test (Task 10).
 
 - [ ] **Step 4: Rodar e ver passar**
 
@@ -1466,9 +1660,64 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `src/modules/ai-setup/README.md`
 - Modify: `.env.example`
 
-- [ ] **Step 1: Atualizar o int test para o client neutro**
+- [ ] **Step 1: Atualizar o int test para o client neutro (preservando os testes de provisionamento)**
 
-Leia `src/modules/ai-setup/tests/ai-setup.int.test.ts`. Onde ele provê o LLM stub (hoje um `IAnthropicMessagesClient` com `createMessage` retornando `{ stop_reason:'end_turn', content:[] }`), troque por um stub neutro do `LlmClient` retornando `{ text: null, toolCalls: [], stop: 'end' }`, fornecido por `{ provide: LLM_CLIENT, useValue: stub }`, `{ provide: LLM_MODEL, useValue: 'deepseek-v4-flash' }`, `{ provide: LLM_MAX_TOKENS, useValue: 8192 }`. Mantenha o restante do teste (gateway recebe `audit.event`, envia `mapping.decision`) idêntico.
+> **⚠️ RECONCILIAÇÃO (provisionamento):** este int test contém testes de provisionamento
+> read-only (approve / reject / fallback_no_privilege) que a feature mergeada adicionou.
+> Eles **devem ser preservados e adaptados** — NÃO removidos. Hoje esses testes dirigem o
+> provisionamento **direto** via `provisioning.proposeAndAwait(...)` (não pelo loop do LLM),
+> então a única mudança obrigatória neles é o **override do LLM**: o int test não pode mais
+> referenciar `ANTHROPIC_MESSAGES_CLIENT` (client deletado na Task 4). Troque o override do
+> stub Anthropic pelo stub neutro abaixo. Os asserts de `provision.proposed`/`provision.result`
+> e os payloads `{ provisioned, activeCredential, reason }` ficam **idênticos**.
+
+**1a. Trocar o stub e os imports.** Remova `import { ANTHROPIC_MESSAGES_CLIENT } from '@modules/ai-setup/services/anthropic-messages.client';` e o stub `llmStub` com `createMessage`. Adicione:
+
+```ts
+import { LLM_CLIENT, LLM_MAX_TOKENS, LLM_MODEL } from '@modules/ai-setup/interfaces/llm-client.interface';
+import type { LlmTurn } from '@modules/ai-setup/interfaces/llm-client.interface';
+
+// Stub neutro do LlmClient: determinístico, nunca chama API real.
+// Por padrão encerra o loop (stop:'end'); cada teste pode reprogramar `nextTurns`
+// para dirigir o loop (ex.: emitir propose_readonly_user e depois encerrar).
+const llmStub = {
+  nextTurns: [] as LlmTurn[],
+  async createTurn(): Promise<LlmTurn> {
+    return this.nextTurns.shift() ?? { text: null, toolCalls: [], stop: 'end' };
+  },
+};
+```
+
+**1b. Trocar o override no `Test.createTestingModule`.** Substitua:
+
+```ts
+.overrideProvider(ANTHROPIC_MESSAGES_CLIENT)
+.useValue(llmStub)
+```
+
+por três overrides dos tokens neutros:
+
+```ts
+.overrideProvider(LLM_CLIENT)
+.useValue(llmStub)
+.overrideProvider(LLM_MODEL)
+.useValue('deepseek-v4-flash')
+.overrideProvider(LLM_MAX_TOKENS)
+.useValue(8192)
+```
+
+Mantenha o restante do teste idêntico: o relé do gateway (`audit.event`, `mapping.decision`)
+e os três testes de provisionamento (approve/reject/fallback) continuam dirigindo
+`provisioning.proposeAndAwait(...)` diretamente e validando `provision.proposed`/`provision.result`.
+
+> **Loop dirigindo `propose_readonly_user` (opcional, se algum teste optar por exercitar o
+> fluxo ponta-a-ponta pelo orquestrador):** como o stub neutro suporta `nextTurns`, basta
+> empilhar um turno com `toolCalls:[{ id:'p1', name:'propose_readonly_user', arguments:{ username:'ro_user' } }]`,
+> `stop:'tool_calls'`, seguido de um turno `{ text:null, toolCalls:[], stop:'end' }` (ou de erro,
+> conforme o caso). Isso faz o orquestrador chamar `handleProposeReadonlyUser` → emitir a fase
+> `provisioning` e `provisioning.proposeAndAwait`, exatamente como o teste unitário da Task 8.
+> Os testes existentes NÃO precisam migrar para esse formato — manter o disparo direto é
+> suficiente e mais estável; o `nextTurns` fica disponível caso se queira cobrir o end-to-end.
 
 > Como `stop:'end'` agora lança no `runSession`, e o `AiSetupFacade.handleCatalog` captura o erro e marca `failed`, o int test que valida o **relé do gateway** (não o sucesso do loop) segue válido — ajuste qualquer assert que dependa de a sessão NÃO falhar para, em vez disso, disparar um `audit.event`/`mapping.proposed` manual pelo bridge (como o teste já faz para exercitar o relé), não pelo loop.
 
@@ -1523,7 +1772,7 @@ Expected: unit do módulo verde; `Quality Gate: APROVADO`.
 
 ```bash
 git add src/modules/ai-setup/tests/ai-setup.int.test.ts src/modules/ai-setup/README.md .env.example
-git commit -m "test(ai-setup): int test no client neutro + docs de providers
+git commit -m "test(ai-setup): int test no client neutro preservando provisionamento + docs de providers
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -1538,7 +1787,12 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **2. Placeholders:** nenhum "TBD/TODO"; todo step tem código/here-doc/commando reais.
 
-**3. Consistência de tipos:** `LlmClient.createTurn`/`LlmTurn`/`LlmToolDef`/`LlmMessage` idênticos entre Tasks 1,3,4,7,8. Construtor do orquestrador (`LLM_CLIENT, LLM_MODEL, LLM_MAX_TOKENS, bridge, translator`) bate com o teste da Task 8 e com o DI da Task 9. `createLlmClient(config, model?)` consistente entre Tasks 5 e 9. `validateCatalogMapping` (Task 6) usado na Task 8.
+**3. Consistência de tipos:** `LlmClient.createTurn`/`LlmTurn`/`LlmToolDef`/`LlmMessage` idênticos entre Tasks 1,3,4,7,8. Construtor do orquestrador (`LLM_CLIENT, LLM_MODEL, LLM_MAX_TOKENS, bridge, translator, provisioning`) bate com o teste da Task 8 e com o DI da Task 9. `createLlmClient(config, model?)` consistente entre Tasks 5 e 9. `validateCatalogMapping` (Task 6) usado na Task 8.
+
+**4. Reconciliação com o provisionamento read-only:** este plano foi escrito ANTES da feature de provisionamento read-only ser mergeada na mesma branch, que alterou orquestrador, módulo e int test. As Tasks 8/9/10 foram reconciliadas para **preservar** essa lógica:
+- **Task 8** — o orquestrador neutro mantém a 6ª dep `AiSetupProvisioningService`, o `engine?` em `IRunSessionInput`, os imports de `AI_SESSION_STATE_MESSAGE_TYPE`/`PROPOSE_READONLY_USER_TOOL_NAME`/`IProvisionSignalToolResult`/`AiSetupProvisioningService`, a interceptação `if (call.name === PROPOSE_READONLY_USER_TOOL_NAME)` antes do `bridge.invokeTool` (empilhando o sinal como `role:'tool'` + `continue`) e o método `handleProposeReadonlyUser` idêntico (fase `provisioning` → `proposeAndAwait` → fase `schema`/`discovering`). O teste ganhou 2 casos neutros de provisionamento (provisionado→schema; não provisionado→discovering) além dos 6 neutros.
+- **Task 9** — `AiSetupProvisioningService` PERMANECE na lista de providers do módulo (não é símbolo de LLM); o orquestrador resolve as 6 deps por DI (3 tokens LLM_* + bridge + translator + provisioning por tipo).
+- **Task 10** — os três testes de provisionamento do int test (approve/reject/fallback) são **preservados e adaptados**, não removidos: a única mudança obrigatória é trocar o override `ANTHROPIC_MESSAGES_CLIENT` (client deletado) pelos overrides neutros `LLM_CLIENT`/`LLM_MODEL`/`LLM_MAX_TOKENS`; o stub neutro suporta `nextTurns` para, se desejado, dirigir o loop a emitir `propose_readonly_user` ponta-a-ponta.
 
 ---
 

@@ -222,6 +222,14 @@ export class ConnectorRuntime {
   private activeConnectorId?: string;
   private activeCustomerId?: string;
   private aiSessionManager?: AiSessionManager;
+  private aiSessionPreviousMapping?: ValidatedMappingConfig;
+  /**
+   * Adapter estabelecido EM MEMÓRIA por `db.connect` durante uma sessão de
+   * IA. Quando definido, é a conexão ativa das tools de schema (tem precedência
+   * sobre `this.adapter`). NÃO persiste em disco; é descartado ao fim/abort da
+   * sessão (ver onSessionEnded).
+   */
+  private aiSessionAdapter?: SourceDatabaseAdapter;
   private inFlightBatch?: ProductChangeBatch;
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
@@ -367,6 +375,7 @@ export class ConnectorRuntime {
     await this.pendingPoll?.catch(() => undefined);
     await this.pendingStateWrite;
     await this.transport.close();
+    await this.discardAiSessionAdapter();
     if (this.adapterConnected && this.adapter) {
       await this.adapter.close();
       this.adapterConnected = false;
@@ -461,13 +470,22 @@ export class ConnectorRuntime {
           programData: this.configuredProgramDataPath(),
           currentDatabase: () => this.config.database,
           currentEngine: () => this.config.database?.driver ?? "unknown",
+          logger: this.logger,
+          connectDatabase: (config) => this.connectAiSessionDatabase(config),
           activateMapping: (mapping) =>
             this.activateMapping({
               connectorId: this.activeConnectorId ?? "ai-session",
               customerId: this.activeCustomerId ?? "ai-session",
               mapping
             })
-        })
+        }),
+      onSessionStart: () => this.pauseForAiSession(),
+      onSessionEnded: ({ applied }) => {
+        void this.discardAiSessionAdapter();
+        if (!applied) {
+          this.resumePollingAfterAiSession();
+        }
+      }
     });
     this.aiSessionManager = manager;
     this.transport.on("aiSessionStart", (command) => {
@@ -790,11 +808,76 @@ export class ConnectorRuntime {
 
   private buildFullAdminRouterDeps(): AdminRouterDependencies {
     return buildRuntimeAdminDeps({
-      getAdapter: () => this.ensureAdapterConnected(),
+      // Se a sessão de IA estabeleceu uma conexão via db.connect, ela tem
+      // precedência: as tools de schema operam nela (em memória).
+      getAdapter: () => (this.aiSessionAdapter ? Promise.resolve(this.aiSessionAdapter) : this.ensureAdapterConnected()),
       fs: nodeFileSystemReader,
       registry: createRegExeRegistryReader(),
       probeDeps: this.buildAdminRouterDeps()
     });
+  }
+
+  /**
+   * Implementação de `db.connect`: cria um adapter read-only a partir dos PARAMS
+   * completos que a IA descobriu, conecta, define-o como a conexão ativa das
+   * tools de schema e confirma com listTables. Não persiste.
+   */
+  private async connectAiSessionDatabase(
+    config: DatabaseConfig
+  ): Promise<{ ok: boolean; tablesCount?: number; errorCode?: string }> {
+    const secrets = [...runtimeConfigSecrets(this.config), config.password].filter(
+      (v): v is string => typeof v === "string" && v.length > 0
+    );
+    let adapter: SourceDatabaseAdapter;
+    try {
+      adapter = createSourceDatabaseAdapter({
+        config,
+        dependencies: this.adapterDependencies,
+        secrets
+      });
+    } catch (error) {
+      this.logger.warn("db.connect.unsupported_driver", {
+        dbDriver: config.driver,
+        message: redactString(error instanceof Error ? error.message : String(error), secrets)
+      });
+      return { ok: false, errorCode: "UNSUPPORTED_DRIVER" };
+    }
+    try {
+      await adapter.connect();
+      const tables = await adapter.listTables();
+      const previous = this.aiSessionAdapter;
+      this.aiSessionAdapter = adapter;
+      if (previous && previous !== adapter) {
+        await previous.close().catch(() => undefined);
+      }
+      this.logger.info("db.connect.connected", {
+        dbDriver: config.driver,
+        dbHost: config.host,
+        dbPort: config.port,
+        dbName: config.name,
+        dbUser: config.user,
+        tablesCount: tables.length
+      });
+      return { ok: true, tablesCount: tables.length };
+    } catch (error) {
+      await adapter.close().catch(() => undefined);
+      const message = redactString(error instanceof Error ? error.message : String(error), secrets);
+      this.logger.warn("db.connect.failed", { dbDriver: config.driver, message });
+      return { ok: false, errorCode: "CONNECTION_FAILED" };
+    }
+  }
+
+  /**
+   * Descarta o adapter de sessão de IA estabelecido por db.connect (fim ou
+   * abort da sessão). A5: o store de credenciais vive na AiSession e some com
+   * ela; aqui só fechamos a conexão em memória.
+   */
+  private async discardAiSessionAdapter(): Promise<void> {
+    const adapter = this.aiSessionAdapter;
+    this.aiSessionAdapter = undefined;
+    if (adapter) {
+      await adapter.close().catch(() => undefined);
+    }
   }
 
   private async handleSetupConfig(request: ConnectorSetupConfigCommand): Promise<void> {
@@ -1199,6 +1282,27 @@ export class ConnectorRuntime {
       });
 
     await this.pendingPoll;
+  }
+
+  private pauseForAiSession(): void {
+    this.aiSessionPreviousMapping = this.activeMapping;
+    this.pausePolling("ai session active");
+  }
+
+  private resumePollingAfterAiSession(): void {
+    const previousMapping = this.aiSessionPreviousMapping;
+    this.aiSessionPreviousMapping = undefined;
+    // Se a própria sessão aplicou um novo mapping, activateMapping já reativou
+    // o poller; nada a fazer. Caso contrário, retoma o mapping anterior.
+    if (this.activeMapping !== previousMapping || !this.poller) {
+      return;
+    }
+    this.pollingPaused = false;
+    this.logger.info("polling.resumed", {
+      reason: "ai session ended without applying mapping",
+      mappingVersion: this.activeMapping?.mappingVersion
+    });
+    this.scheduleNextPoll(0);
   }
 
   private pausePolling(reason: string): void {

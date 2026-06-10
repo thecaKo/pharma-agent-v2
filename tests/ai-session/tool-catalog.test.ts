@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buildToolCatalog, CATALOG_VERSION, TOOL_NAMES, toolNameToAdminCommand } from "../../src/ai-session/tool-catalog.js";
 
 describe("tool-catalog", () => {
-  it("declara as 14 ferramentas canônicas mais o sinal propose_readonly_user", () => {
+  it("declara as primitivas read-only canônicas mais os sinais (propose_readonly_user + db.connect)", () => {
     expect([...TOOL_NAMES].sort()).toEqual([
+      "db.connect",
+      "fs.listDir",
       "fs.readConfigFile",
+      "fs.readFile",
+      "fs.stat",
       "probe.connections",
       "probe.engines",
       "probe.network",
@@ -24,7 +28,7 @@ describe("tool-catalog", () => {
 
   it("buildToolCatalog devolve um ToolDescriptor por ferramenta", () => {
     const tools = buildToolCatalog();
-    expect(tools).toHaveLength(15);
+    expect(tools).toHaveLength(19);
     for (const tool of tools) {
       expect(tool.name).toBeTypeOf("string");
       expect(tool.description.length).toBeGreaterThan(0);
@@ -41,6 +45,27 @@ describe("tool-catalog", () => {
     expect(toolNameToAdminCommand("schema.listTables")).toBe("schema.listTables");
     expect(toolNameToAdminCommand("sql.runReadOnlySelect")).toBe("sql.runReadOnlySelect");
     expect(toolNameToAdminCommand("desconhecida")).toBeUndefined();
+  });
+});
+
+describe("db.connect no catálogo", () => {
+  it("db.connect é sinal sem comando admin e exige os params completos", () => {
+    const catalog = buildToolCatalog();
+    const tool = catalog.find((t) => t.name === "db.connect");
+    expect(tool).toBeDefined();
+    expect(tool!.inputSchema).toMatchObject({
+      type: "object",
+      required: ["driver", "host", "user", "password", "database"]
+    });
+    expect(toolNameToAdminCommand("db.connect")).toBeUndefined();
+  });
+});
+
+describe("fs.* primitivas no catálogo", () => {
+  it("fs.listDir/fs.readFile/fs.stat mapeiam para comando admin", () => {
+    expect(toolNameToAdminCommand("fs.listDir")).toBe("fs.listDir");
+    expect(toolNameToAdminCommand("fs.readFile")).toBe("fs.readFile");
+    expect(toolNameToAdminCommand("fs.stat")).toBe("fs.stat");
   });
 });
 
