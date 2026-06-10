@@ -3,7 +3,7 @@ import type { SourceRow } from "../mapping/types.js";
 import type { DatabaseOperation } from "./errors.js";
 import { normalizeDatabaseError } from "./errors.js";
 import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
-import { ReadOnlySqlError } from "./readonly-sql.js";
+import { ReadOnlySqlError, validateReadOnlySelect } from "./readonly-sql.js";
 import type { DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput, QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter } from "./source-adapter.js";
 
 export interface MariaDbConnectionConfig {
