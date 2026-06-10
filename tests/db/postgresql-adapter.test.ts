@@ -326,3 +326,82 @@ describe("PostgresSourceAdapter", () => {
     }
   });
 });
+
+describe("PostgresSourceAdapter — tools de schema da sessão de IA", () => {
+  function makeAdapter(rows: unknown[]) {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+    return { adapter, connection };
+  }
+
+  it("describeTable delega para listColumns (nome qualificado public.products)", async () => {
+    const { adapter, connection } = makeAdapter([
+      { name: "id", dataType: "integer", nullable: "NO" }
+    ]);
+    await adapter.connect();
+
+    const columns = await adapter.describeTable("public.products");
+
+    expect(columns).toEqual([{ name: "id", dataType: "integer", nullable: false }]);
+    const [, params] = (connection.query as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(params).toEqual(["public", "products"]);
+  });
+
+  it("sampleRows quota o identificador e aplica limite saneado", async () => {
+    const { adapter, connection } = makeAdapter([{ id: 1 }]);
+    await adapter.connect();
+
+    const rows = await adapter.sampleRows("public.products", 5000);
+
+    expect(rows).toEqual([{ id: 1 }]);
+    const [sql] = (connection.query as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sql).toContain('"public"."products"');
+    expect(sql).toContain("limit 1000");
+  });
+
+  it("listForeignKeys normaliza as linhas do information_schema", async () => {
+    const { adapter } = makeAdapter([
+      {
+        fromTable: "discounts",
+        fromColumn: "product_id",
+        toTable: "products",
+        toColumn: "id",
+        constraintName: "fk_discounts_product"
+      }
+    ]);
+    await adapter.connect();
+
+    const fks = await adapter.listForeignKeys("public.discounts");
+
+    expect(fks).toEqual([
+      {
+        fromTable: "discounts",
+        fromColumn: "product_id",
+        toTable: "products",
+        toColumn: "id",
+        constraintName: "fk_discounts_product"
+      }
+    ]);
+  });
+
+  it("runReadOnlySelect valida o SQL (rejeita não-SELECT) e retorna as linhas", async () => {
+    const { adapter } = makeAdapter([{ id: 1, name: "Produto A" }]);
+    await adapter.connect();
+
+    const rows = await adapter.runReadOnlySelect({
+      sql: "select id, name from public.products",
+      limit: 10
+    });
+    expect(rows).toEqual([{ id: 1, name: "Produto A" }]);
+
+    await expect(
+      adapter.runReadOnlySelect({ sql: "delete from products", limit: 10 })
+    ).rejects.toThrow();
+  });
+});
