@@ -230,6 +230,12 @@ export class ConnectorRuntime {
    * sessão (ver onSessionEnded).
    */
   private aiSessionAdapter?: SourceDatabaseAdapter;
+  /**
+   * Config do banco que a sessão de IA conectou com sucesso (db.connect).
+   * Em modo bootstrap `this.config.database` é undefined — sem este campo, o
+   * approve do mapping não teria banco para persistir/ativar.
+   */
+  private aiSessionDatabaseConfig?: DatabaseConfig;
   private inFlightBatch?: ProductChangeBatch;
   private inFlightSnapshotPending?: PendingSnapshotProduct[];
   private inFlightSnapshotFieldsSignature?: string;
@@ -466,10 +472,26 @@ export class ConnectorRuntime {
           handleAdminRequest: (req) => handleAdminRequest(req, this.buildFullAdminRouterDeps()),
           secrets: () => runtimeConfigSecrets(this.config),
           now: this.now,
-          writeDatabaseConfig,
+          // Persistir a config de banco do approve também ADOTA o banco no
+          // runtime (config em memória + adapter principal), espelhando o
+          // caminho do bootstrapDbConfig — sem isso, activateMapping falharia
+          // com DatabaseConfigurationUnavailableError em modo bootstrap.
+          writeDatabaseConfig: async (programData, database) => {
+            await writeDatabaseConfig(programData, database);
+            this.config = { ...this.config, database } as ConnectorConfig;
+            this.adapter = createSourceDatabaseAdapter({
+              config: database,
+              dependencies: this.adapterDependencies,
+              secrets: runtimeConfigSecrets(this.config)
+            });
+            this.adapterConnected = false;
+          },
           programData: this.configuredProgramDataPath(),
-          currentDatabase: () => this.config.database,
-          currentEngine: () => this.config.database?.driver ?? "unknown",
+          // Em bootstrap this.config.database é undefined: o banco vigente é o
+          // que a sessão de IA conectou com sucesso via db.connect.
+          currentDatabase: () => this.aiSessionDatabaseConfig ?? this.config.database,
+          currentEngine: () =>
+            (this.aiSessionDatabaseConfig ?? this.config.database)?.driver ?? "unknown",
           logger: this.logger,
           connectDatabase: (config) => this.connectAiSessionDatabase(config),
           activateMapping: (mapping) =>
@@ -847,6 +869,9 @@ export class ConnectorRuntime {
       const tables = await adapter.listTables();
       const previous = this.aiSessionAdapter;
       this.aiSessionAdapter = adapter;
+      // Guarda a config que funcionou: é ela que o approve do mapping persiste
+      // e ativa (em bootstrap não existe this.config.database).
+      this.aiSessionDatabaseConfig = config;
       if (previous && previous !== adapter) {
         await previous.close().catch(() => undefined);
       }
@@ -875,6 +900,7 @@ export class ConnectorRuntime {
   private async discardAiSessionAdapter(): Promise<void> {
     const adapter = this.aiSessionAdapter;
     this.aiSessionAdapter = undefined;
+    this.aiSessionDatabaseConfig = undefined;
     if (adapter) {
       await adapter.close().catch(() => undefined);
     }
