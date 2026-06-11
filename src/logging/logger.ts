@@ -20,22 +20,28 @@ export interface LoggerOptions {
   logFormat?: LogFormat;
 }
 
-const noopLogger: Logger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined
+// Ordem de severidade dos níveis pino usados pelo agente.
+const LEVEL_SEVERITY: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
 };
+
+// Eleva "debug" para "info" fora de dev; níveis >= info são respeitados.
+function raiseToInfo(level: LogLevel): LogLevel {
+  return LEVEL_SEVERITY[level] < LEVEL_SEVERITY.info ? "info" : level;
+}
 
 export function createLogger(options: LoggerOptions): Logger {
   const nodeEnv = options.nodeEnv ?? process.env.NODE_ENV;
-  if (nodeEnv !== "dev") {
-    return noopLogger;
-  }
+  // Fora de dev o logger NÃO pode ser cego: info/warn/error continuam saindo
+  // (essencial p/ diagnóstico em staging/produção); só debug é elevado p/ info.
+  const effectiveLevel = nodeEnv === "dev" ? options.level : raiseToInfo(options.level);
 
   const logger = pino(
     {
-      level: options.level,
+      level: effectiveLevel,
       base: undefined,
       timestamp: pino.stdTimeFunctions.isoTime,
       messageKey: "event",

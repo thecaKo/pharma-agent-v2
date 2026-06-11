@@ -51,18 +51,43 @@ describe("createLogger", () => {
     expect(output.error).not.toHaveBeenCalled();
   });
 
-  it("does not write outside NODE_ENV dev", () => {
+  it("fora de dev emite info/warn/error mas suprime debug", () => {
     const output = {
       log: vi.fn(),
       error: vi.fn()
     };
     const logger = createLogger({ level: "debug", output, nodeEnv: "production" });
 
+    logger.debug("debug.suppressed");
     logger.info("configuration.loaded");
+    logger.warn("config.warning");
     logger.error("runtime.error");
 
-    expect(output.log).not.toHaveBeenCalled();
-    expect(output.error).not.toHaveBeenCalled();
+    // debug não deve sair fora de dev, mesmo com level "debug" configurado.
+    const allLines = [...output.log.mock.calls, ...output.error.mock.calls].map(
+      (call) => call[0] as string
+    );
+    expect(allLines.some((line) => line.includes("debug.suppressed"))).toBe(false);
+
+    // info/warn vão para output.log; error vai para output.error.
+    expect(output.log.mock.calls.some((call) => String(call[0]).includes("configuration.loaded"))).toBe(true);
+    expect(output.log.mock.calls.some((call) => String(call[0]).includes("config.warning"))).toBe(true);
+    expect(output.error.mock.calls.some((call) => String(call[0]).includes("runtime.error"))).toBe(true);
+  });
+
+  it("dentro de dev emite debug quando level é debug", () => {
+    const output = {
+      log: vi.fn(),
+      error: vi.fn()
+    };
+    const logger = createLogger({ level: "debug", output, nodeEnv: "dev" });
+
+    logger.debug("debug.visible");
+
+    expect(output.log).toHaveBeenCalledOnce();
+    const line = output.log.mock.calls[0]?.[0] as string;
+    expect(line).toContain("debug.visible");
+    expect(JSON.parse(line)).toMatchObject({ level: "debug", event: "debug.visible" });
   });
 
   it("emits JSON when logFormat is 'json' explicitly", () => {

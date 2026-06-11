@@ -225,9 +225,16 @@ function resolveCursorType(
   return raw;
 }
 
-function parseCursorFieldFromIncrementalQuery(sql: string): string | undefined {
-  const match = sql.match(/WHERE\s+`([^`]+)`\s*>\s*\?/i);
-  return match?.[1]?.trim();
+export function parseCursorFieldFromIncrementalQuery(sql: string): string | undefined {
+  // MySQL/MariaDB: identificador entre backticks e placeholder posicional "?".
+  const mysqlMatch = sql.match(/WHERE\s+`([^`]+)`\s*>\s*\?/i);
+  if (mysqlMatch?.[1]) {
+    return mysqlMatch[1].trim();
+  }
+
+  // PostgreSQL: identificador entre aspas duplas e placeholder posicional "$1".
+  const postgresMatch = sql.match(/WHERE\s+"([^"]+)"\s*>\s*\$\d+/i);
+  return postgresMatch?.[1]?.trim();
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

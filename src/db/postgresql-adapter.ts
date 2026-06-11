@@ -88,6 +88,7 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
   }
 
   public async queryChanges(input: QueryChangesInput): Promise<SourceRow[]> {
+    assertPositionalPlaceholders(input.sql);
     const connection = this.requireConnection();
 
     try {
@@ -107,6 +108,7 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
   }
 
   public async querySnapshotPage(input: QuerySnapshotPageInput): Promise<SourceRow[]> {
+    assertPositionalPlaceholders(input.sql);
     const connection = this.requireConnection();
 
     try {
@@ -296,6 +298,19 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
       });
     }
     return this.connection;
+  }
+}
+
+// Defesa contra query mal gerada a montante (mapping inválido): tanto queryChanges
+// quanto querySnapshotPage bindam exatamente 2 params posicionais ($1 e $2). Sem
+// esses placeholders o driver falha com erro opaco ("requires 0 parameters") e o
+// cursor nunca avança (stall silencioso). Convertemos isso numa falha explícita e
+// diagnosticável — a mensagem usa apenas tokens do dialeto, nunca segredos.
+function assertPositionalPlaceholders(sql: string): void {
+  if (!/\$1\b/.test(sql) || !/\$2\b/.test(sql)) {
+    throw new Error(
+      "Query PostgreSQL sem placeholders $1/$2 — config de mapping inválida; reative o conector"
+    );
   }
 }
 
