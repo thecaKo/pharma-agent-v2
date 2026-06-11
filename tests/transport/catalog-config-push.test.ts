@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCatalogConfigPushMessage } from "../../src/transport/catalog-config-push.js";
+import {
+  normalizeCatalogConfigPushMessage,
+  parseCursorFieldFromIncrementalQuery
+} from "../../src/transport/catalog-config-push.js";
 import { parseServerMessage } from "../../src/transport/protocol.js";
 import { neoApiCatalogConfigPush } from "../helpers/catalog-config-push.js";
 import { productionConnectorConfig } from "../helpers/mapping.js";
@@ -287,5 +290,21 @@ LIMIT ?`,
       snapshotQuery: "select * from products order by product_id limit ? offset ?",
       snapshotPageSize: 500
     });
+  });
+});
+
+describe("parseCursorFieldFromIncrementalQuery", () => {
+  it("extrai a coluna no dialeto MySQL (backtick + ?)", () => {
+    const sql = "SELECT * FROM `products` WHERE `updated_at` > ? ORDER BY `updated_at` ASC LIMIT ?";
+    expect(parseCursorFieldFromIncrementalQuery(sql)).toBe("updated_at");
+  });
+
+  it("extrai a coluna no dialeto PostgreSQL (aspas duplas + $1)", () => {
+    const sql = 'SELECT * FROM "products" WHERE "atualizado_em" > $1 ORDER BY "atualizado_em" ASC LIMIT $2';
+    expect(parseCursorFieldFromIncrementalQuery(sql)).toBe("atualizado_em");
+  });
+
+  it("retorna undefined quando nenhum dialeto casa", () => {
+    expect(parseCursorFieldFromIncrementalQuery("SELECT 1")).toBeUndefined();
   });
 });

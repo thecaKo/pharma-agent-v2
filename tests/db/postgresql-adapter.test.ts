@@ -190,7 +190,11 @@ describe("PostgresSourceAdapter", () => {
     await adapter.connect();
 
     try {
-      await adapter.queryChanges({ sql: "select 1", cursor: null, limit: 1 });
+      await adapter.queryChanges({
+        sql: "select * from products where updated_at > $1 limit $2",
+        cursor: null,
+        limit: 1
+      });
     } catch (error) {
       expect(error).toBeInstanceOf(DatabaseOperationError);
       expect(error).toMatchObject({
@@ -200,6 +204,74 @@ describe("PostgresSourceAdapter", () => {
       });
       expect(String(error)).not.toContain("super-secret-password");
       expect(String(error)).not.toContain("vetorfarma");
+    }
+  });
+
+  it("queryChanges lança erro claro e NÃO chama o driver quando faltam $1/$2", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows: [] })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    await expect(
+      adapter.queryChanges({
+        // SQL sem placeholders posicionais (sintoma do bug de query mal gerada).
+        sql: "select * from products order by updated_at",
+        cursor: 10,
+        limit: 25
+      })
+    ).rejects.toThrow(/placeholders \$1\/\$2/i);
+
+    expect(connection.query).not.toHaveBeenCalled();
+  });
+
+  it("querySnapshotPage lança erro claro e NÃO chama o driver quando faltam $1/$2", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows: [] })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    await expect(
+      adapter.querySnapshotPage({
+        sql: "select * from products order by product_id",
+        limit: 500,
+        offset: 1000
+      })
+    ).rejects.toThrow(/placeholders \$1\/\$2/i);
+
+    expect(connection.query).not.toHaveBeenCalled();
+  });
+
+  it("guard de placeholder não vaza segredos na mensagem", async () => {
+    const connection: PostgresDriverConnection = {
+      query: vi.fn(async () => ({ rows: [] })),
+      end: vi.fn(async () => undefined)
+    };
+    const adapter = new PostgresSourceAdapter({
+      config,
+      connectionFactory: vi.fn(async () => connection)
+    });
+
+    await adapter.connect();
+
+    try {
+      await adapter.queryChanges({ sql: "select 1", cursor: 10, limit: 25 });
+      throw new Error("deveria ter lançado");
+    } catch (error) {
+      expect(String((error as Error).message)).not.toContain("super-secret-password");
+      expect(String((error as Error).message)).not.toContain("vetorfarma");
     }
   });
 
