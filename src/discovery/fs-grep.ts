@@ -1,5 +1,6 @@
+import { resolve as pathResolve } from "node:path";
 import { isBinary } from "./fs-primitives.js";
-import { isDeniedRoot, shouldSkipDir, joinPath, mapFsError, clamp } from "./fs-walk.js";
+import { isDeniedRoot, isSecretDir, shouldSkipDir, joinPath, mapFsError, clamp } from "./fs-walk.js";
 
 const DEFAULT_EXTENSIONS = ["ini", "conf", "config", "xml", "json", "env", "udl", "properties"];
 const DEFAULT_MAX_DEPTH = 3;
@@ -13,6 +14,9 @@ const MAX_MATCHES_CEILING = 200;
 const MAX_FILES_SCANNED_CEILING = 2000;
 
 const TEXT_TRUNCATE_CHARS = 300;
+const MAX_PATTERN_LENGTH = 500;
+// linhas além deste limite são truncadas antes do matching (anti-ReDoS)
+const MAX_LINE_BYTES = 16384;
 
 export interface FsGrepMatch {
   path: string;
@@ -42,10 +46,11 @@ export interface FsGrepResult {
   truncated: boolean;
   filesScanned: number;
   errors: FsGrepError[];
+  truncatedFiles?: string[];
 }
 
 export interface FsGrepOps {
-  readdir(path: string): Promise<Array<{ name: string; isFile: boolean; isDirectory: boolean }>>;
+  readdir(path: string): Promise<Array<{ name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink?: boolean }>>;
   readFileBytes(path: string, maxBytes: number): Promise<{ buffer: Buffer; truncated: boolean; totalSize: number }>;
 }
 
@@ -56,6 +61,11 @@ export async function fsGrep(input: FsGrepInput, ops: FsGrepOps): Promise<FsGrep
   const maxFilesScanned = clamp(input.maxFilesScanned ?? DEFAULT_MAX_FILES_SCANNED, 1, MAX_FILES_SCANNED_CEILING);
   const extensions = new Set((input.extensions ?? DEFAULT_EXTENSIONS).map((e) => e.toLowerCase().replace(/^\./, "")));
   const flags = input.ignoreCase !== false ? "i" : "";
+
+  if (input.pattern.length > MAX_PATTERN_LENGTH) {
+    return { matches: [], truncated: false, filesScanned: 0, errors: [{ path: input.root, reason: "unknown" }] };
+  }
+
   let re: RegExp;
   try {
     re = new RegExp(input.pattern, flags);
@@ -65,18 +75,20 @@ export async function fsGrep(input: FsGrepInput, ops: FsGrepOps): Promise<FsGrep
 
   const matches: FsGrepMatch[] = [];
   const errors: FsGrepError[] = [];
+  const truncatedFiles: string[] = [];
   let filesScanned = 0;
   let truncated = false;
 
-  if (isDeniedRoot(input.root)) {
+  const normalizedRoot = pathResolve(input.root);
+  if (isDeniedRoot(normalizedRoot)) {
     return { matches, truncated: false, filesScanned: 0, errors: [{ path: input.root, reason: "permission" }] };
   }
 
-  const stack: { path: string; depth: number }[] = [{ path: input.root, depth: 0 }];
+  const stack: { path: string; depth: number }[] = [{ path: normalizedRoot, depth: 0 }];
 
   while (stack.length > 0 && matches.length < maxMatches && filesScanned < maxFilesScanned) {
     const frame = stack.pop()!;
-    let dirents: Array<{ name: string; isFile: boolean; isDirectory: boolean }>;
+    let dirents: Array<{ name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink?: boolean }>;
     try {
       dirents = await ops.readdir(frame.path);
     } catch (err) {
@@ -90,8 +102,10 @@ export async function fsGrep(input: FsGrepInput, ops: FsGrepOps): Promise<FsGrep
         break;
       }
       const fullPath = joinPath(frame.path, entry.name);
+      if (entry.isSymbolicLink) continue;
       if (entry.isDirectory) {
         if (shouldSkipDir(entry.name)) continue;
+        if (isDeniedRoot(fullPath)) continue;
         if (frame.depth + 1 < maxDepth) {
           stack.push({ path: fullPath, depth: frame.depth + 1 });
         }
@@ -113,10 +127,16 @@ export async function fsGrep(input: FsGrepInput, ops: FsGrepOps): Promise<FsGrep
 
       if (isBinary(read.buffer)) continue;
 
+      if (read.truncated) {
+        truncatedFiles.push(fullPath);
+        truncated = true;
+      }
+
       const text = read.buffer.toString("utf8");
       const lines = text.split("\n");
       for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
-        const lineText = lines[i]!;
+        // trunca linha antes do matching para evitar ReDoS em linhas gigantes
+        const lineText = lines[i]!.length > MAX_LINE_BYTES ? lines[i]!.slice(0, MAX_LINE_BYTES) : lines[i]!;
         re.lastIndex = 0;
         const m = re.exec(lineText);
         if (!m) continue;
@@ -134,5 +154,5 @@ export async function fsGrep(input: FsGrepInput, ops: FsGrepOps): Promise<FsGrep
     if (matches.length >= maxMatches || filesScanned >= maxFilesScanned) truncated = true;
   }
 
-  return { matches, truncated, filesScanned, errors };
+  return { matches, truncated, filesScanned, errors, ...(truncatedFiles.length > 0 ? { truncatedFiles } : {}) };
 }

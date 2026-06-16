@@ -30,13 +30,26 @@ export function utilDecode(value: string, encoding: string): DecodeResult {
     }
   }
 
-  // hex / base64 via Buffer
-  const buf = Buffer.from(value, encoding);
-  if (buf.length === 0 && value.length > 0) {
+  if (encoding === "hex") {
+    if (!/^[0-9a-fA-F]+$/.test(value) || value.length % 2 !== 0) {
+      return { ok: false, encoding, errorCode: "DECODE_FAILED" };
+    }
+    const buf = Buffer.from(value, "hex");
+    if (isBinary(buf)) return { ok: false, encoding, errorCode: "DECODE_FAILED" };
+    return { ok: true, encoding, decoded: buf.toString("utf8") };
+  }
+
+  // base64
+  const buf = Buffer.from(value, "base64");
+  if (buf.length === 0 && value.trim().replace(/={1,2}$/, "").length > 0) {
     return { ok: false, encoding, errorCode: "DECODE_FAILED" };
   }
-  if (isBinary(buf)) {
+  // round-trip: garante que o input é base64 válido e não lixo silenciosamente ignorado
+  const reEncoded = buf.toString("base64");
+  const normalize = (s: string) => s.replace(/[=\s]/g, "");
+  if (normalize(reEncoded) !== normalize(value)) {
     return { ok: false, encoding, errorCode: "DECODE_FAILED" };
   }
+  if (isBinary(buf)) return { ok: false, encoding, errorCode: "DECODE_FAILED" };
   return { ok: true, encoding, decoded: buf.toString("utf8") };
 }

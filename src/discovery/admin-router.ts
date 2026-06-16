@@ -381,6 +381,9 @@ function validateFsFindInput(input: unknown): Validated<FsFindInput> {
   if (!Array.isArray(input.roots) || input.roots.length === 0) {
     return { ok: false, error: "input.roots deve ser um array não vazio" };
   }
+  if (input.roots.length > 32) {
+    return { ok: false, error: "input.roots aceita no máximo 32 itens" };
+  }
   const roots: string[] = [];
   for (const r of input.roots) {
     if (typeof r !== "string" || r.length === 0) return { ok: false, error: "input.roots deve conter strings não vazias" };

@@ -118,4 +118,85 @@ describe("fsGrep", () => {
     const result = await fsGrep({ root: "/root", pattern: "match" }, ops);
     expect(result.matches).toHaveLength(0);
   });
+
+  it("respeita maxDepth", async () => {
+    const ops = makeOps({
+      "/root": { "sub": "dir" },
+      "/root/sub": { "deep": "dir" },
+      "/root/sub/deep": { "cfg.json": '{"x":1}' }
+    });
+    const result = await fsGrep({ root: "/root", pattern: "x", maxDepth: 1 }, ops);
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it("retorna erro para pattern inválido (ReDoS guard)", async () => {
+    const ops = makeOps({ "/root": { "cfg.json": "abc" } });
+    const result = await fsGrep({ root: "/root", pattern: "[" }, ops);
+    expect(result.matches).toHaveLength(0);
+    expect(result.errors).toHaveLength(1);
+  });
+
+  it("registra ENOENT sem abortar (missing)", async () => {
+    const ops: FsGrepOps = {
+      async readdir() { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); },
+      async readFileBytes() { return { buffer: Buffer.from(""), truncated: false, totalSize: 0 }; }
+    };
+    const result = await fsGrep({ root: "/missing", pattern: "x" }, ops);
+    expect(result.errors[0]!.reason).toBe("missing");
+  });
+
+  it("trunca linha longa antes de matching (anti-ReDoS)", async () => {
+    // MATCH está além dos primeiros 16384 chars → não encontra após truncagem
+    const longLine = "a".repeat(20000) + "MATCH";
+    const ops = makeOps({ "/root": { "cfg.json": longLine } });
+    const result = await fsGrep({ root: "/root", pattern: "MATCH" }, ops);
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it("bloqueia root com .. (path traversal normalizado)", async () => {
+    const ops = makeOps({});
+    const result = await fsGrep({ root: "/tmp/../proc/1", pattern: "x" }, ops);
+    expect(result.errors[0]!.reason).toBe("permission");
+  });
+
+  it("bloqueia /proc diretamente", async () => {
+    const ops = makeOps({ "/proc": { "1": "dir" } });
+    const result = await fsGrep({ root: "/proc", pattern: "x" }, ops);
+    expect(result.errors[0]!.reason).toBe("permission");
+  });
+
+  it("não segue symlink de diretório", async () => {
+    const ops: FsGrepOps = {
+      async readdir(path) {
+        if (path === "/root") {
+          return [{ name: "link", isFile: false, isDirectory: true, isSymbolicLink: true }];
+        }
+        return [{ name: "cfg.json", isFile: true, isDirectory: false }];
+      },
+      async readFileBytes() {
+        return { buffer: Buffer.from('{"x":1}'), truncated: false, totalSize: 7 };
+      }
+    };
+    const result = await fsGrep({ root: "/root", pattern: "x" }, ops);
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it("propaga truncated quando arquivo foi lido parcialmente", async () => {
+    const content = "password=secret\n" + "x".repeat(300 * 1024);
+    const ops: FsGrepOps = {
+      async readdir(path) {
+        if (path === "/root") return [{ name: "cfg.json", isFile: true, isDirectory: false }];
+        return [];
+      },
+      async readFileBytes(_path, maxBytes) {
+        const buf = Buffer.from(content, "utf8").subarray(0, maxBytes);
+        return { buffer: buf, truncated: true, totalSize: Buffer.byteLength(content) };
+      }
+    };
+    const result = await fsGrep({ root: "/root", pattern: "password" }, ops);
+    expect(result.matches).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedFiles).toBeDefined();
+    expect(result.truncatedFiles!.length).toBeGreaterThan(0);
+  });
 });

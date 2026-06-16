@@ -274,7 +274,11 @@ export class MariaDbSourceAdapter implements SourceDatabaseAdapter {
         if (!tables.has(tbl)) tables.set(tbl, []);
         const cols = tables.get(tbl)!;
         if (!cols.some((c) => c.name === col)) {
-          cols.push({ name: col, dataType: typeof row.data_type === "string" ? row.data_type : undefined });
+          cols.push({
+            name: col,
+            dataType: typeof row.data_type === "string" ? row.data_type : undefined,
+            nullable: normalizeNullable(row.is_nullable)
+          });
         }
         if (tables.size >= maxTables) break;
       }

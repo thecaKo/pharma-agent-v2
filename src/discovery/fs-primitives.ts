@@ -11,6 +11,7 @@
  */
 
 import { promises as nodeFs } from "node:fs";
+import { resolve as pathResolve } from "node:path";
 
 export const DEFAULT_MAX_READ_BYTES = 256 * 1024;
 const MAX_READ_BYTES_CEILING = 4 * 1024 * 1024;
@@ -86,14 +87,23 @@ const DENIED_PATH_REGEXES: RegExp[] = [
   /^\/dev(\/|$)/i,
   /^[A-Z]:[\\/]Windows[\\/]System32[\\/]config(\\|\/|$)/i,
   /^[A-Z]:[\\/]Windows[\\/]System32[\\/]LogFiles(\\|\/|$)/i,
-  /^[A-Z]:[\\/]\$Recycle\.Bin(\\|\/|$)/i
+  /^[A-Z]:[\\/]\$Recycle\.Bin(\\|\/|$)/i,
+  /[/\\]\.ssh(\/|\\|$)/i,
+  /[/\\]\.aws(\/|\\|$)/i,
+  /[/\\]\.gnupg2?(\/|\\|$)/i
 ];
 
 function validatePath(raw: unknown): { ok: true; path: string } | { ok: false; errorCode: FsErrorCode } {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     return { ok: false, errorCode: "INVALID_INPUT" };
   }
-  const path = raw.trim();
+  const trimmed = raw.trim();
+  // Testa raw primeiro (captura paths Windows absolutos como C:\...) antes de resolver
+  if (DENIED_PATH_REGEXES.some((re) => re.test(trimmed))) {
+    return { ok: false, errorCode: "DENIED_PATH" };
+  }
+  // path.resolve desfaz ../ antes de checar a deny-list (previne traversal Unix)
+  const path = pathResolve(trimmed);
   if (DENIED_PATH_REGEXES.some((re) => re.test(path))) {
     return { ok: false, errorCode: "DENIED_PATH" };
   }

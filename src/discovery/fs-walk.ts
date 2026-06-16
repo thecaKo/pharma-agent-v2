@@ -1,3 +1,16 @@
+import { resolve as pathResolve, normalize as pathNormalize } from "node:path";
+
+export const SECRET_DIR_NAMES: ReadonlySet<string> = new Set([".ssh", ".aws", ".gnupg", ".gnupg2"]);
+
+export function isSecretDir(name: string): boolean {
+  return SECRET_DIR_NAMES.has(name.toLowerCase());
+}
+
+// path.resolve garante path absoluto e desfaz ../. sem acessar o FS
+export function normalizePath(p: string): string {
+  return pathResolve(pathNormalize(p));
+}
+
 export const DENY_ROOT_REGEXES: RegExp[] = [
   /^[A-Z]:\\?$/i,
   /^[A-Z]:\\Users\\?$/i,
@@ -6,7 +19,10 @@ export const DENY_ROOT_REGEXES: RegExp[] = [
   /^\/$/,
   /^\/home\/?$/,
   /^\/usr\/?$/,
-  /^\/etc\/?$/
+  /^\/etc\/?$/,
+  /^\/proc(\/|$)/i,
+  /^\/sys(\/|$)/i,
+  /^\/dev(\/|$)/i
 ];
 
 const SKIP_DIR_NAMES_CI: ReadonlySet<string> = new Set([
@@ -25,6 +41,7 @@ export function isDeniedRoot(path: string): boolean {
 export function shouldSkipDir(name: string): boolean {
   const lower = name.toLowerCase();
   if (SKIP_DIR_NAMES_CI.has(lower)) return true;
+  if (isSecretDir(lower)) return true;
   if (name.startsWith(".") && !PRESERVED_HIDDEN_DIRS.has(lower)) return true;
   return false;
 }

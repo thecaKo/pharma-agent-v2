@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { MySqlSourceAdapter, type MySqlDriverConnection } from "../../src/db/mysql-adapter.js";
 import { PostgresSourceAdapter, type PostgresDriverConnection } from "../../src/db/postgresql-adapter.js";
+import { SqlServerSourceAdapter, type SqlServerDriverConnection } from "../../src/db/sqlserver-adapter.js";
+import { FirebirdSourceAdapter, type FirebirdDriverConnection } from "../../src/db/firebird-adapter.js";
+import { MariaDbSourceAdapter, type MariaDbDriverConnection } from "../../src/db/mariadb-adapter.js";
 import type { DatabaseConfig } from "../../src/config/types.js";
 
 const mysqlConfig: DatabaseConfig = {
@@ -118,5 +121,146 @@ describe("PostgresSourceAdapter.listSchemas", () => {
     const result = await adapter.listSchemas();
     expect(result).toContain("public");
     expect(conn.query).toHaveBeenCalledWith(expect.stringContaining("information_schema.schemata"), []);
+  });
+});
+
+const sqlserverConfig: DatabaseConfig = {
+  driver: "sqlserver",
+  host: "127.0.0.1",
+  port: 1433,
+  name: "pharmacy",
+  user: "ro",
+  password: "secret"
+};
+
+const firebirdConfig: DatabaseConfig = {
+  driver: "firebird",
+  host: "127.0.0.1",
+  port: 3050,
+  name: "pharmacy",
+  user: "ro",
+  password: "secret"
+};
+
+const mariadbConfig: DatabaseConfig = {
+  driver: "mariadb",
+  host: "127.0.0.1",
+  port: 3306,
+  name: "pharmacy",
+  user: "ro",
+  password: "secret"
+};
+
+function makeSqlServerConnection(rows: Record<string, unknown>[]): SqlServerDriverConnection {
+  return {
+    query: vi.fn(async () => ({ recordset: rows })),
+    close: vi.fn(async () => undefined)
+  };
+}
+
+function makeFirebirdConnection(rows: Record<string, unknown>[]): FirebirdDriverConnection {
+  return {
+    query: vi.fn(async () => rows),
+    detach: vi.fn(async () => undefined)
+  };
+}
+
+function makeMariaDbConn(rows: Record<string, unknown>[]): MariaDbDriverConnection {
+  return {
+    query: vi.fn(async () => [rows, []]),
+    end: vi.fn(async () => undefined)
+  };
+}
+
+describe("SqlServerSourceAdapter.searchSchema", () => {
+  it("retorna tabelas com schema e nullable", async () => {
+    const rows = [
+      { schema_name: "dbo", table_name: "produtos", column_name: "codigo", data_type: "varchar", nullable: 0 }
+    ];
+    const conn = makeSqlServerConnection(rows);
+    const adapter = new SqlServerSourceAdapter({ config: sqlserverConfig, connectionFactory: vi.fn(async () => conn) });
+    await adapter.connect();
+
+    const result = await adapter.searchSchema({ keywords: ["codigo"] });
+
+    expect(result.tables).toHaveLength(1);
+    expect(result.tables[0]!.schema).toBe("dbo");
+    expect(result.tables[0]!.table).toBe("produtos");
+    expect(result.tables[0]!.matchedColumns[0]!.nullable).toBe(false);
+  });
+
+  it("filtra por input.schema quando fornecido", async () => {
+    const conn = makeSqlServerConnection([]);
+    const adapter = new SqlServerSourceAdapter({ config: sqlserverConfig, connectionFactory: vi.fn(async () => conn) });
+    await adapter.connect();
+
+    await adapter.searchSchema({ keywords: ["codigo"], schema: "historico" });
+
+    expect(conn.query).toHaveBeenCalledWith(
+      expect.stringContaining("@schema"),
+      expect.objectContaining({ schema: "historico" })
+    );
+  });
+
+  it("separa tabelas de schemas diferentes com mesmo nome (dbo.x vs historico.x)", async () => {
+    const rows = [
+      { schema_name: "dbo", table_name: "estoque", column_name: "codigo", data_type: "int", nullable: 0 },
+      { schema_name: "historico", table_name: "estoque", column_name: "codigo", data_type: "int", nullable: 1 }
+    ];
+    const conn = makeSqlServerConnection(rows);
+    const adapter = new SqlServerSourceAdapter({ config: sqlserverConfig, connectionFactory: vi.fn(async () => conn) });
+    await adapter.connect();
+
+    const result = await adapter.searchSchema({ keywords: ["codigo"] });
+
+    expect(result.tables).toHaveLength(2);
+    const schemas = result.tables.map((t) => t.schema).sort();
+    expect(schemas).toEqual(["dbo", "historico"]);
+  });
+
+  it("multi-keyword: tabela que aparece em dois keywords não duplica coluna", async () => {
+    const conn = makeSqlServerConnection([]);
+    (conn.query as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ recordset: [{ schema_name: "dbo", table_name: "produtos", column_name: "codigo", data_type: "varchar", nullable: 0 }] })
+      .mockResolvedValueOnce({ recordset: [{ schema_name: "dbo", table_name: "produtos", column_name: "codigo_barras", data_type: "varchar", nullable: 1 }] });
+    const adapter = new SqlServerSourceAdapter({ config: sqlserverConfig, connectionFactory: vi.fn(async () => conn) });
+    await adapter.connect();
+
+    const result = await adapter.searchSchema({ keywords: ["codigo", "barras"] });
+
+    expect(result.tables).toHaveLength(1);
+    expect(result.tables[0]!.matchedColumns).toHaveLength(2);
+  });
+});
+
+describe("FirebirdSourceAdapter.searchSchema", () => {
+  it("retorna tabelas com coluna e nullable", async () => {
+    const rows = [
+      { table_name: "PRODUTOS", column_name: "CODIGO", nullable: 0 }
+    ];
+    const conn = makeFirebirdConnection(rows);
+    const adapter = new FirebirdSourceAdapter({ config: firebirdConfig, connectionFactory: vi.fn(async () => conn) });
+    await adapter.connect();
+
+    const result = await adapter.searchSchema({ keywords: ["CODIGO"] });
+
+    expect(result.tables).toHaveLength(1);
+    expect(result.tables[0]!.table).toBe("PRODUTOS");
+    expect(result.tables[0]!.matchedColumns[0]!.nullable).toBe(false);
+  });
+});
+
+describe("MariaDbSourceAdapter.searchSchema", () => {
+  it("retorna nullable em matchedColumns", async () => {
+    const rows = [
+      { table_name: "produtos", column_name: "codigo", data_type: "varchar", is_nullable: "YES" }
+    ];
+    const conn = makeMariaDbConn(rows);
+    const adapter = new MariaDbSourceAdapter({ config: mariadbConfig, connectionFactory: vi.fn(async () => conn) });
+    await adapter.connect();
+
+    const result = await adapter.searchSchema({ keywords: ["codigo"] });
+
+    expect(result.tables[0]!.matchedColumns[0]!.nullable).toBe(true);
   });
 });

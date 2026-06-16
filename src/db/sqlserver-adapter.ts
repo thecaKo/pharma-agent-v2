@@ -302,33 +302,50 @@ export class SqlServerSourceAdapter implements SourceDatabaseAdapter {
   public async searchSchema(input: SchemaSearchInput): Promise<SchemaSearchResult> {
     const connection = this.requireConnection("listColumns");
     const maxTables = Math.min(input.maxTables ?? 50, 200);
-    const tables = new Map<string, SchemaMatchedColumn[]>();
+    // chave "schema.table" para não colidir dbo.estoque vs historico.estoque
+    const tables = new Map<string, { schema: string; table: string; cols: SchemaMatchedColumn[] }>();
     for (const keyword of input.keywords) {
       const like = `%${keyword}%`;
+      const schemaFilter = input.schema ? `and s.name = @schema` : ``;
       const { recordset } = await connection.query(
-        `select t.name as table_name, c.name as column_name, tp.name as data_type
+        `select s.name as schema_name, t.name as table_name, c.name as column_name,
+                tp.name as data_type, c.is_nullable as nullable
          from sys.columns c
          join sys.tables t on c.object_id = t.object_id
+         join sys.schemas s on t.schema_id = s.schema_id
          join sys.types tp on c.user_type_id = tp.user_type_id
          where c.name like @like
-         order by t.name, c.column_id`,
-        { like }
+           ${schemaFilter}
+         order by s.name, t.name, c.column_id`,
+        input.schema ? { like, schema: input.schema } : { like }
       );
       const rows = normalizeRows(recordset);
       for (const row of rows) {
+        const schema = typeof row.schema_name === "string" ? row.schema_name : String(row.schema_name ?? "");
         const tbl = typeof row.table_name === "string" ? row.table_name : String(row.table_name ?? "");
         const col = typeof row.column_name === "string" ? row.column_name : String(row.column_name ?? "");
-        if (!tbl || !col) continue;
-        if (!tables.has(tbl)) tables.set(tbl, []);
-        const cols = tables.get(tbl)!;
-        if (!cols.some((c) => c.name === col)) {
-          cols.push({ name: col, dataType: typeof row.data_type === "string" ? row.data_type : undefined });
+        if (!schema || !tbl || !col) continue;
+        const key = `${schema}.${tbl}`;
+        if (!tables.has(key)) tables.set(key, { schema, table: tbl, cols: [] });
+        const entry = tables.get(key)!;
+        if (!entry.cols.some((c) => c.name === col)) {
+          entry.cols.push({
+            name: col,
+            dataType: typeof row.data_type === "string" ? row.data_type : undefined,
+            nullable: normalizeNullable(row.nullable)
+          });
         }
         if (tables.size >= maxTables) break;
       }
       if (tables.size >= maxTables) break;
     }
-    return { tables: [...tables.entries()].slice(0, maxTables).map(([table, matchedColumns]) => ({ table, matchedColumns })) };
+    return {
+      tables: [...tables.values()].slice(0, maxTables).map(({ schema, table, cols }) => ({
+        schema,
+        table,
+        matchedColumns: cols
+      }))
+    };
   }
 
   public async listSchemas(): Promise<string[]> {

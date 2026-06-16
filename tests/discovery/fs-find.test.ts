@@ -87,4 +87,29 @@ describe("fsFind", () => {
     expect(result.files).toHaveLength(1);
     expect(result.files[0]!.path).toContain("myconfig");
   });
+
+  it("respeita maxDepth", async () => {
+    const ops = makeOps({
+      "/root": [{ name: "sub", isFile: false, isDirectory: true }],
+      "/root/sub": [{ name: "db.udl", isFile: true, isDirectory: false }]
+    });
+    const result = await fsFind({ roots: ["/root"], namePatterns: ["*.udl"], maxDepth: 1 }, ops);
+    expect(result.files).toHaveLength(0);
+  });
+
+  it("rejeita roots > MAX_ROOTS com erro explícito", async () => {
+    const ops = makeOps({});
+    const roots = Array.from({ length: 33 }, (_, i) => `/path${i}`);
+    const result = await fsFind({ roots, namePatterns: ["*.udl"] }, ops);
+    expect(result.rootsRejected.length).toBeGreaterThan(0);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("registra erro ENOENT sem abortar (missing)", async () => {
+    const ops: FsFindOps = {
+      async readdir() { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); }
+    };
+    const result = await fsFind({ roots: ["/missing"], namePatterns: ["*.udl"] }, ops);
+    expect(result.errors[0]!.reason).toBe("missing");
+  });
 });

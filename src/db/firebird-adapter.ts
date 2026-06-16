@@ -307,7 +307,8 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
       // Firebird LIKE case-insensitive com UPPER
       const like = `%${keyword.toUpperCase()}%`;
       const result = await connection.query(
-        `select rf.rdb$relation_name as table_name, rf.rdb$field_name as column_name
+        `select rf.rdb$relation_name as table_name, rf.rdb$field_name as column_name,
+                case when coalesce(rf.rdb$null_flag, 0) = 1 then 0 else 1 end as nullable
          from rdb$relation_fields rf
          join rdb$relations r on rf.rdb$relation_name = r.rdb$relation_name
          where r.rdb$system_flag = 0 and r.rdb$view_blr is null
@@ -322,7 +323,7 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
         if (!tbl || !col) continue;
         if (!tables.has(tbl)) tables.set(tbl, []);
         const cols = tables.get(tbl)!;
-        if (!cols.some((c) => c.name === col)) cols.push({ name: col });
+        if (!cols.some((c) => c.name === col)) cols.push({ name: col, nullable: normalizeNullable(row.nullable) });
         if (tables.size >= maxTables) break;
       }
       if (tables.size >= maxTables) break;
