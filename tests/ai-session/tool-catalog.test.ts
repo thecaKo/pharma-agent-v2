@@ -5,6 +5,8 @@ describe("tool-catalog", () => {
   it("declara as primitivas read-only canônicas mais os sinais (propose_readonly_user + db.connect)", () => {
     expect([...TOOL_NAMES].sort()).toEqual([
       "db.connect",
+      "fs.find",
+      "fs.grep",
       "fs.listDir",
       "fs.readConfigFile",
       "fs.readFile",
@@ -20,15 +22,18 @@ describe("tool-catalog", () => {
       "registry.readKey",
       "schema.describeTable",
       "schema.listForeignKeys",
+      "schema.listSchemas",
       "schema.listTables",
       "schema.sampleRows",
-      "sql.runReadOnlySelect"
+      "schema.search",
+      "sql.runReadOnlySelect",
+      "util.decode"
     ]);
   });
 
   it("buildToolCatalog devolve um ToolDescriptor por ferramenta", () => {
     const tools = buildToolCatalog();
-    expect(tools).toHaveLength(19);
+    expect(tools).toHaveLength(24);
     for (const tool of tools) {
       expect(tool.name).toBeTypeOf("string");
       expect(tool.description.length).toBeGreaterThan(0);

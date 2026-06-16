@@ -145,6 +145,12 @@ describe("fsReadFile", () => {
     expect(res).toEqual({ ok: false, errorCode: "DENIED_PATH" });
   });
 
+  it("bloqueia path traversal com .. apontando para /proc → DENIED_PATH", async () => {
+    const ops = makeOps({});
+    const res = await fsReadFile({ path: "/tmp/../proc/self/environ" }, ops);
+    expect(res).toEqual({ ok: false, errorCode: "DENIED_PATH" });
+  });
+
   it("caminho inexistente → NOT_FOUND", async () => {
     const ops = makeOps({});
     const res = await fsReadFile({ path: "/nope" }, ops);

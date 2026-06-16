@@ -11,6 +11,9 @@ import type {
   QueryChangesInput,
   QuerySnapshotPageInput,
   RunReadOnlySelectInput,
+  SchemaSearchInput,
+  SchemaSearchResult,
+  SchemaMatchedColumn,
   SourceDatabaseAdapter
 } from "./source-adapter.js";
 
@@ -286,6 +289,61 @@ export class PostgresSourceAdapter implements SourceDatabaseAdapter {
       }
       throw normalizeDatabaseError({ driver: "postgresql", operation: "provision", error, secrets: this.secrets });
     }
+  }
+
+  public async searchSchema(input: SchemaSearchInput): Promise<SchemaSearchResult> {
+    const connection = this.requireConnection("listColumns");
+    const maxTables = Math.min(input.maxTables ?? 50, 200);
+    const schemaFilter = input.schema ?? "public";
+
+    const tables = new Map<string, SchemaMatchedColumn[]>();
+    for (const keyword of input.keywords) {
+      const like = `%${keyword}%`;
+      const result = await connection.query(
+        `select table_schema, table_name, column_name, data_type, is_nullable
+         from information_schema.columns
+         where table_schema = $1
+           and column_name ilike $2
+         order by table_name, ordinal_position
+         limit $3`,
+        [schemaFilter, like, maxTables * 10]
+      );
+      const rows = normalizeRows(result);
+      for (const row of rows) {
+        const tbl = typeof row.table_name === "string" ? row.table_name : String(row.table_name ?? "");
+        const col = typeof row.column_name === "string" ? row.column_name : String(row.column_name ?? "");
+        if (!tbl || !col) continue;
+        if (!tables.has(tbl)) tables.set(tbl, []);
+        const cols = tables.get(tbl)!;
+        if (!cols.some((c) => c.name === col)) {
+          cols.push({
+            name: col,
+            dataType: typeof row.data_type === "string" ? row.data_type : undefined,
+            nullable: typeof row.is_nullable === "string" ? row.is_nullable.toUpperCase() === "YES" : undefined
+          });
+        }
+        if (tables.size >= maxTables) break;
+      }
+      if (tables.size >= maxTables) break;
+    }
+
+    return {
+      tables: [...tables.entries()].slice(0, maxTables).map(([table, matchedColumns]) => ({
+        schema: schemaFilter,
+        table,
+        matchedColumns
+      }))
+    };
+  }
+
+  public async listSchemas(): Promise<string[]> {
+    const connection = this.requireConnection("listTables");
+    const result = await connection.query(
+      `select schema_name from information_schema.schemata order by schema_name`,
+      []
+    );
+    const rows = normalizeRows(result);
+    return rows.map((r) => String(r.schema_name ?? "")).filter(Boolean);
   }
 
   private requireConnection(operation: DatabaseOperation = "query"): PostgresDriverConnection {

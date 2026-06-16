@@ -5,6 +5,9 @@ import type { RegistryReader } from "../db/registry-reader.js";
 import { readConfigFile } from "../discovery/read-config-file.js";
 import { readRegistryKey } from "../discovery/read-registry-key.js";
 import { fsListDir, fsReadFile, fsStat, nodeFsPrimitivesOps } from "../discovery/fs-primitives.js";
+import { fsGrep } from "../discovery/fs-grep.js";
+import { fsFind } from "../discovery/fs-find.js";
+import { promises as nodeFs } from "node:fs";
 import type { AiSessionDeps } from "../ai-session/ai-session.js";
 import type { AdminResponseMessage, AdminRequestMessage } from "../transport/protocol.js";
 import type { DatabaseConfig } from "../config/types.js";
@@ -42,9 +45,41 @@ export function buildRuntimeAdminDeps(input: RuntimeAdminDepsInput): AdminRouter
     fsListDir: async (dir) => fsListDir(dir, nodeFsPrimitivesOps),
     fsReadFile: async (file) => fsReadFile(file, nodeFsPrimitivesOps),
     fsStat: async (file) => fsStat(file, nodeFsPrimitivesOps),
-    registryReadKey: async (key) => readRegistryKey(input.registry, key)
+    fsGrep: async (grepInput) => fsGrep(grepInput, nodeFsGrepOps),
+    fsFind: async (findInput) => fsFind(findInput, nodeFsFindOps),
+    registryReadKey: async (key) => readRegistryKey(input.registry, key),
+    schemaSearch: async (si) => (await input.getAdapter()).searchSchema(si),
+    schemaListSchemas: async () => (await input.getAdapter()).listSchemas()
   };
 }
+
+const nodeFsGrepOps = {
+  async readdir(path: string) {
+    const dirents = await nodeFs.readdir(path, { withFileTypes: true });
+    return dirents.map((d) => ({ name: d.name, isFile: d.isFile(), isDirectory: d.isDirectory() }));
+  },
+  readFileBytes: nodeFsPrimitivesOps.readFileBytes
+};
+
+const nodeFsFindOps = {
+  async readdir(path: string) {
+    const dirents = await nodeFs.readdir(path, { withFileTypes: true });
+    const result = [];
+    for (const d of dirents) {
+      let size: number | undefined;
+      let mtimeMs: number | undefined;
+      if (d.isFile()) {
+        try {
+          const s = await nodeFs.stat(`${path}/${d.name}`);
+          size = s.size;
+          mtimeMs = s.mtimeMs;
+        } catch { /* ignore */ }
+      }
+      result.push({ name: d.name, isFile: d.isFile(), isDirectory: d.isDirectory(), size, mtimeMs });
+    }
+    return result;
+  }
+};
 
 export interface AiSessionDepsInput {
   handleAdminRequest: (req: AdminRequestMessage) => Promise<AdminResponseMessage>;
