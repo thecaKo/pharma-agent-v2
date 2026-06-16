@@ -38,6 +38,28 @@ export interface RunReadOnlySelectInput {
   timeoutMs?: number;
 }
 
+export interface SchemaSearchInput {
+  keywords: string[];
+  schema?: string;
+  maxTables?: number;
+}
+
+export interface SchemaMatchedColumn {
+  name: string;
+  dataType?: string;
+  nullable?: boolean;
+}
+
+export interface SchemaSearchTable {
+  schema?: string;
+  table: string;
+  matchedColumns: SchemaMatchedColumn[];
+}
+
+export interface SchemaSearchResult {
+  tables: SchemaSearchTable[];
+}
+
 export interface SourceDatabaseAdapter {
   connect(): Promise<void>;
   close(): Promise<void>;
@@ -50,6 +72,8 @@ export interface SourceDatabaseAdapter {
   sampleRows(tableName: string, limit: number): Promise<SourceRow[]>;
   runReadOnlySelect(input: RunReadOnlySelectInput): Promise<SourceRow[]>;
   provisionReadonlyUser(input: ProvisionReadonlyUserInput): Promise<ProvisionReadonlyUserResult>;
+  searchSchema(input: SchemaSearchInput): Promise<SchemaSearchResult>;
+  listSchemas(): Promise<string[]>;
 }
 
 export type SourceDatabaseAdapterKind =

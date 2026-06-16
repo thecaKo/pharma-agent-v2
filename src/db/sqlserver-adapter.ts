@@ -11,6 +11,9 @@ import type {
   QueryChangesInput,
   QuerySnapshotPageInput,
   RunReadOnlySelectInput,
+  SchemaSearchInput,
+  SchemaSearchResult,
+  SchemaMatchedColumn,
   SourceDatabaseAdapter
 } from "./source-adapter.js";
 
@@ -294,6 +297,45 @@ export class SqlServerSourceAdapter implements SourceDatabaseAdapter {
       }
       throw normalizeDatabaseError({ driver: "sqlserver", operation: "provision", error, secrets: this.secrets });
     }
+  }
+
+  public async searchSchema(input: SchemaSearchInput): Promise<SchemaSearchResult> {
+    const connection = this.requireConnection("listColumns");
+    const maxTables = Math.min(input.maxTables ?? 50, 200);
+    const tables = new Map<string, SchemaMatchedColumn[]>();
+    for (const keyword of input.keywords) {
+      const like = `%${keyword}%`;
+      const { recordset } = await connection.query(
+        `select t.name as table_name, c.name as column_name, tp.name as data_type
+         from sys.columns c
+         join sys.tables t on c.object_id = t.object_id
+         join sys.types tp on c.user_type_id = tp.user_type_id
+         where c.name like @like
+         order by t.name, c.column_id`,
+        { like }
+      );
+      const rows = normalizeRows(recordset);
+      for (const row of rows) {
+        const tbl = typeof row.table_name === "string" ? row.table_name : String(row.table_name ?? "");
+        const col = typeof row.column_name === "string" ? row.column_name : String(row.column_name ?? "");
+        if (!tbl || !col) continue;
+        if (!tables.has(tbl)) tables.set(tbl, []);
+        const cols = tables.get(tbl)!;
+        if (!cols.some((c) => c.name === col)) {
+          cols.push({ name: col, dataType: typeof row.data_type === "string" ? row.data_type : undefined });
+        }
+        if (tables.size >= maxTables) break;
+      }
+      if (tables.size >= maxTables) break;
+    }
+    return { tables: [...tables.entries()].slice(0, maxTables).map(([table, matchedColumns]) => ({ table, matchedColumns })) };
+  }
+
+  public async listSchemas(): Promise<string[]> {
+    const connection = this.requireConnection("listTables");
+    const { recordset } = await connection.query(`select name from sys.schemas order by name`, {});
+    const rows = normalizeRows(recordset);
+    return rows.map((r) => String(r.name ?? "")).filter(Boolean);
   }
 
   private requireConnection(operation: DatabaseOperation = "query"): SqlServerDriverConnection {

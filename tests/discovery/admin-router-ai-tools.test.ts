@@ -20,7 +20,11 @@ function baseDeps(): AdminRouterDependencies {
     fsListDir: vi.fn(async () => ({ ok: true, payload: { entries: [{ name: "db.conf", type: "file", size: 3 }] } } as never)),
     fsReadFile: vi.fn(async () => ({ ok: true, payload: { path: "/app/db.conf", content: "host=db", truncated: false } } as never)),
     fsStat: vi.fn(async () => ({ ok: true, payload: { exists: true, type: "file", size: 3 } } as never)),
-    registryReadKey: vi.fn(async () => ({ ok: true, path: "HKLM\\x", values: { Server: "db" } } as never))
+    fsGrep: vi.fn(async () => ({ matches: [], truncated: false, filesScanned: 0, errors: [] })),
+    fsFind: vi.fn(async () => ({ files: [], truncated: false, rootsRejected: [], errors: [] })),
+    registryReadKey: vi.fn(async () => ({ ok: true, path: "HKLM\\x", values: { Server: "db" } } as never)),
+    schemaSearch: vi.fn(async () => ({ tables: [{ table: "produtos", matchedColumns: [{ name: "codigo" }] }] })),
+    schemaListSchemas: vi.fn(async () => ["pharmacy", "information_schema"])
   };
 }
 
@@ -111,5 +115,74 @@ describe("handleAdminRequest — ferramentas de IA", () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.payload).toEqual({ exists: true, type: "file", size: 3 });
     expect(deps.fsStat).toHaveBeenCalledWith({ path: "/app/db.conf" });
+  });
+
+  it("fs.grep exige root e pattern", async () => {
+    const semRoot = await handleAdminRequest(buildAdminRequestMessage({ requestId: "r7", command: "fs.grep" }), baseDeps());
+    expect(semRoot.ok).toBe(false);
+    if (!semRoot.ok) expect(semRoot.error.errorCode).toBe("INVALID_INPUT");
+
+    const semPattern = await handleAdminRequest({ ...buildAdminRequestMessage({ requestId: "r8", command: "fs.grep" }), input: { root: "/app" } }, baseDeps());
+    expect(semPattern.ok).toBe(false);
+  });
+
+  it("fs.grep delega para fsGrep e retorna resultado", async () => {
+    const deps = baseDeps();
+    const req = { ...buildAdminRequestMessage({ requestId: "r9", command: "fs.grep" }), input: { root: "/app", pattern: "host" } };
+    const res = await handleAdminRequest(req, deps);
+    expect(res.ok).toBe(true);
+    expect(deps.fsGrep).toHaveBeenCalledWith(expect.objectContaining({ root: "/app", pattern: "host" }));
+  });
+
+  it("fs.find exige roots e namePatterns", async () => {
+    const semRoots = await handleAdminRequest(buildAdminRequestMessage({ requestId: "r10", command: "fs.find" }), baseDeps());
+    expect(semRoots.ok).toBe(false);
+
+    const semPatterns = await handleAdminRequest({ ...buildAdminRequestMessage({ requestId: "r11", command: "fs.find" }), input: { roots: ["/app"] } }, baseDeps());
+    expect(semPatterns.ok).toBe(false);
+  });
+
+  it("fs.find delega para fsFind e retorna resultado", async () => {
+    const deps = baseDeps();
+    const req = { ...buildAdminRequestMessage({ requestId: "r12", command: "fs.find" }), input: { roots: ["/app"], namePatterns: ["*.udl"] } };
+    const res = await handleAdminRequest(req, deps);
+    expect(res.ok).toBe(true);
+    expect(deps.fsFind).toHaveBeenCalledWith(expect.objectContaining({ roots: ["/app"], namePatterns: ["*.udl"] }));
+  });
+
+  it("schema.search exige keywords", async () => {
+    const res = await handleAdminRequest(buildAdminRequestMessage({ requestId: "r13", command: "schema.search" }), baseDeps());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.errorCode).toBe("INVALID_INPUT");
+  });
+
+  it("schema.search retorna tabelas encontradas", async () => {
+    const deps = baseDeps();
+    const req = { ...buildAdminRequestMessage({ requestId: "r14", command: "schema.search" }), input: { keywords: ["codigo"] } };
+    const res = await handleAdminRequest(req, deps);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.payload as { tables: unknown[] }).tables).toHaveLength(1);
+    expect(deps.schemaSearch).toHaveBeenCalledWith({ keywords: ["codigo"] });
+  });
+
+  it("schema.listSchemas retorna lista de schemas", async () => {
+    const deps = baseDeps();
+    const req = buildAdminRequestMessage({ requestId: "r15", command: "schema.listSchemas" });
+    const res = await handleAdminRequest(req, deps);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.payload as { schemas: string[] }).schemas).toContain("pharmacy");
+  });
+
+  it("util.decode decodifica base64 via admin-router", async () => {
+    const req = { ...buildAdminRequestMessage({ requestId: "r16", command: "util.decode" }), input: { value: "aGVsbG8=", encoding: "base64" } };
+    const res = await handleAdminRequest(req, baseDeps());
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.payload as { decoded: string }).decoded).toBe("hello");
+  });
+
+  it("util.decode exige value e encoding", async () => {
+    const res = await handleAdminRequest(buildAdminRequestMessage({ requestId: "r17", command: "util.decode" }), baseDeps());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.errorCode).toBe("INVALID_INPUT");
   });
 });

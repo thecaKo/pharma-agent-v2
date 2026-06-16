@@ -21,11 +21,15 @@ export type AdminCommand =
   | "schema.describeTable"
   | "schema.listForeignKeys"
   | "schema.sampleRows"
+  | "schema.search"
+  | "schema.listSchemas"
   | "sql.runReadOnlySelect"
   | "fs.readConfigFile"
   | "fs.listDir"
   | "fs.readFile"
   | "fs.stat"
+  | "fs.grep"
+  | "fs.find"
   | "registry.readKey"
   | "probe.engines"
   | "probe.odbc_dsns"
@@ -33,7 +37,8 @@ export type AdminCommand =
   | "probe.test_connection"
   | "probe.processes"
   | "probe.connections"
-  | "probe.scan_config_dirs";
+  | "probe.scan_config_dirs"
+  | "util.decode";
 
 export interface ConnectorConfigMessage {
   type: "connector.config";
@@ -540,11 +545,15 @@ const ADMIN_COMMANDS = new Set<AdminCommand>([
   "schema.describeTable",
   "schema.listForeignKeys",
   "schema.sampleRows",
+  "schema.search",
+  "schema.listSchemas",
   "sql.runReadOnlySelect",
   "fs.readConfigFile",
   "fs.listDir",
   "fs.readFile",
   "fs.stat",
+  "fs.grep",
+  "fs.find",
   "registry.readKey",
   "probe.engines",
   "probe.odbc_dsns",
@@ -552,7 +561,8 @@ const ADMIN_COMMANDS = new Set<AdminCommand>([
   "probe.test_connection",
   "probe.processes",
   "probe.connections",
-  "probe.scan_config_dirs"
+  "probe.scan_config_dirs",
+  "util.decode"
 ]);
 
 function parseAdminCommand(value: unknown): AdminCommand {

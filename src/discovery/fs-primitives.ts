@@ -238,7 +238,7 @@ export const nodeFsPrimitivesOps: FsPrimitivesOps = {
  * Heurística de binário: presença de byte NUL na janela lida. Suficiente para
  * pular executáveis/imagens/arquivos de banco sem tentar decodificá-los.
  */
-function isBinary(buffer: Buffer): boolean {
+export function isBinary(buffer: Buffer): boolean {
   const window = buffer.subarray(0, Math.min(buffer.length, 8192));
   return window.includes(0);
 }

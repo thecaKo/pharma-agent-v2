@@ -6,7 +6,8 @@ import { validateReadOnlySelect, ReadOnlySqlError } from "./readonly-sql.js";
 import { type ProvisionReadonlyUserInput, type ProvisionReadonlyUserResult, validateReadonlyUsername } from "./provision-types.js";
 import type {
   DatabaseColumn, DatabaseTable, ForeignKey, QueryChangesInput,
-  QuerySnapshotPageInput, RunReadOnlySelectInput, SourceDatabaseAdapter
+  QuerySnapshotPageInput, RunReadOnlySelectInput, SchemaSearchInput, SchemaSearchResult,
+  SchemaMatchedColumn, SourceDatabaseAdapter
 } from "./source-adapter.js";
 
 export interface FirebirdConnectionConfig {
@@ -296,6 +297,42 @@ export class FirebirdSourceAdapter implements SourceDatabaseAdapter {
       }
     }
     return { outcome: "provisioned", grantedScope: "all_tables" };
+  }
+
+  public async searchSchema(input: SchemaSearchInput): Promise<SchemaSearchResult> {
+    const connection = this.requireConnection("listColumns");
+    const maxTables = Math.min(input.maxTables ?? 50, 200);
+    const tables = new Map<string, SchemaMatchedColumn[]>();
+    for (const keyword of input.keywords) {
+      // Firebird LIKE case-insensitive com UPPER
+      const like = `%${keyword.toUpperCase()}%`;
+      const result = await connection.query(
+        `select rf.rdb$relation_name as table_name, rf.rdb$field_name as column_name
+         from rdb$relation_fields rf
+         join rdb$relations r on rf.rdb$relation_name = r.rdb$relation_name
+         where r.rdb$system_flag = 0 and r.rdb$view_blr is null
+           and upper(rf.rdb$field_name) like ?
+         order by rf.rdb$relation_name, rf.rdb$field_position`,
+        [like]
+      );
+      const rows = normalizeRows(result);
+      for (const row of rows) {
+        const tbl = (typeof row.table_name === "string" ? row.table_name : String(row.table_name ?? "")).trim();
+        const col = (typeof row.column_name === "string" ? row.column_name : String(row.column_name ?? "")).trim();
+        if (!tbl || !col) continue;
+        if (!tables.has(tbl)) tables.set(tbl, []);
+        const cols = tables.get(tbl)!;
+        if (!cols.some((c) => c.name === col)) cols.push({ name: col });
+        if (tables.size >= maxTables) break;
+      }
+      if (tables.size >= maxTables) break;
+    }
+    return { tables: [...tables.entries()].slice(0, maxTables).map(([table, matchedColumns]) => ({ table, matchedColumns })) };
+  }
+
+  public async listSchemas(): Promise<string[]> {
+    // Firebird é single-database; sem schemas nomeados — retorna vazio
+    return [];
   }
 
   private requireConnection(operation: DatabaseOperation = "query"): FirebirdDriverConnection {

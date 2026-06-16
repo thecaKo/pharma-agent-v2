@@ -12,11 +12,14 @@ import type { ProcessCandidate } from "./processes.js";
 import type { ConnectionCandidate } from "./connections.js";
 import type { ScanConfigDirsInput, ScanConfigDirsResult } from "./scan-config-dirs.js";
 import { MAX_ROOTS } from "./scan-config-dirs.js";
-import type { DatabaseColumn, ForeignKey } from "../db/source-adapter.js";
+import type { DatabaseColumn, ForeignKey, SchemaSearchInput, SchemaSearchResult } from "../db/source-adapter.js";
 import type { SourceRow } from "../mapping/types.js";
 import type { ReadConfigFileResult } from "./read-config-file.js";
 import type { ReadRegistryKeyResult } from "./read-registry-key.js";
 import type { FsListDirResult, FsReadFileResult, FsStatResult } from "./fs-primitives.js";
+import { utilDecode } from "./util-decode.js";
+import type { FsGrepInput, FsGrepResult } from "./fs-grep.js";
+import type { FsFindInput, FsFindResult } from "./fs-find.js";
 
 const PROBE_VERSION = "1";
 
@@ -37,7 +40,11 @@ export interface AdminRouterDependencies {
   fsListDir: (input: { path: string }) => Promise<FsListDirResult>;
   fsReadFile: (input: { path: string; maxBytes?: number }) => Promise<FsReadFileResult>;
   fsStat: (input: { path: string }) => Promise<FsStatResult>;
+  fsGrep: (input: FsGrepInput) => Promise<FsGrepResult>;
+  fsFind: (input: FsFindInput) => Promise<FsFindResult>;
   registryReadKey: (input: { path: string }) => Promise<ReadRegistryKeyResult>;
+  schemaSearch: (input: SchemaSearchInput) => Promise<SchemaSearchResult>;
+  schemaListSchemas: () => Promise<string[]>;
 }
 
 export async function handleAdminRequest(
@@ -132,10 +139,38 @@ export async function handleAdminRequest(
         const result = await deps.fsStat({ path: parsed.value });
         return result.ok ? success(req, result.payload) : failure(req, result.errorCode);
       }
+      case "fs.grep": {
+        const parsed = validateFsGrepInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.fsGrep(parsed.value);
+        return success(req, result);
+      }
+      case "fs.find": {
+        const parsed = validateFsFindInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.fsFind(parsed.value);
+        return success(req, result);
+      }
       case "registry.readKey": {
         const parsed = validatePathInput(req.input);
         if (!parsed.ok) return invalidInput(req, parsed.error);
         const result = await deps.registryReadKey({ path: parsed.value });
+        return success(req, result);
+      }
+      case "schema.search": {
+        const parsed = validateSchemaSearchInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = await deps.schemaSearch(parsed.value);
+        return success(req, result);
+      }
+      case "schema.listSchemas": {
+        const schemas = await deps.schemaListSchemas();
+        return success(req, { schemas });
+      }
+      case "util.decode": {
+        const parsed = validateDecodeInput(req.input);
+        if (!parsed.ok) return invalidInput(req, parsed.error);
+        const result = utilDecode(parsed.value.value, parsed.value.encoding);
         return success(req, result);
       }
       default:
@@ -321,4 +356,75 @@ function validateScanConfigDirsInput(input: unknown): Validated<ScanConfigDirsIn
     out.maxAgeDays = input.maxAgeDays;
   }
   return { ok: true, value: out };
+}
+
+function validateFsGrepInput(input: unknown): Validated<FsGrepInput> {
+  if (!isRecord(input)) return { ok: false, error: "input deve ser um objeto" };
+  if (typeof input.root !== "string" || input.root.trim().length === 0) {
+    return { ok: false, error: "input.root deve ser uma string não vazia" };
+  }
+  if (typeof input.pattern !== "string" || input.pattern.trim().length === 0) {
+    return { ok: false, error: "input.pattern deve ser uma string não vazia" };
+  }
+  const out: FsGrepInput = { root: input.root.trim(), pattern: input.pattern };
+  if (typeof input.ignoreCase === "boolean") out.ignoreCase = input.ignoreCase;
+  if (Array.isArray(input.extensions)) out.extensions = input.extensions.filter((e): e is string => typeof e === "string");
+  if (typeof input.maxDepth === "number" && Number.isInteger(input.maxDepth) && input.maxDepth > 0) out.maxDepth = input.maxDepth;
+  if (typeof input.maxFileBytes === "number" && Number.isInteger(input.maxFileBytes) && input.maxFileBytes > 0) out.maxFileBytes = input.maxFileBytes;
+  if (typeof input.maxMatches === "number" && Number.isInteger(input.maxMatches) && input.maxMatches > 0) out.maxMatches = input.maxMatches;
+  if (typeof input.maxFilesScanned === "number" && Number.isInteger(input.maxFilesScanned) && input.maxFilesScanned > 0) out.maxFilesScanned = input.maxFilesScanned;
+  return { ok: true, value: out };
+}
+
+function validateFsFindInput(input: unknown): Validated<FsFindInput> {
+  if (!isRecord(input)) return { ok: false, error: "input deve ser um objeto" };
+  if (!Array.isArray(input.roots) || input.roots.length === 0) {
+    return { ok: false, error: "input.roots deve ser um array não vazio" };
+  }
+  const roots: string[] = [];
+  for (const r of input.roots) {
+    if (typeof r !== "string" || r.length === 0) return { ok: false, error: "input.roots deve conter strings não vazias" };
+    roots.push(r);
+  }
+  if (!Array.isArray(input.namePatterns) || input.namePatterns.length === 0) {
+    return { ok: false, error: "input.namePatterns deve ser um array não vazio" };
+  }
+  const namePatterns: string[] = [];
+  for (const p of input.namePatterns) {
+    if (typeof p !== "string" || p.length === 0) return { ok: false, error: "input.namePatterns deve conter strings não vazias" };
+    namePatterns.push(p);
+  }
+  const out: FsFindInput = { roots, namePatterns };
+  if (typeof input.maxDepth === "number" && Number.isInteger(input.maxDepth) && input.maxDepth > 0) out.maxDepth = input.maxDepth;
+  if (typeof input.maxResults === "number" && Number.isInteger(input.maxResults) && input.maxResults > 0) out.maxResults = input.maxResults;
+  return { ok: true, value: out };
+}
+
+function validateSchemaSearchInput(input: unknown): Validated<SchemaSearchInput> {
+  if (!isRecord(input)) return { ok: false, error: "input deve ser um objeto" };
+  if (!Array.isArray(input.keywords) || input.keywords.length === 0) {
+    return { ok: false, error: "input.keywords deve ser um array não vazio" };
+  }
+  const keywords: string[] = [];
+  for (const k of input.keywords) {
+    if (typeof k !== "string" || k.trim().length === 0) return { ok: false, error: "input.keywords deve conter strings não vazias" };
+    keywords.push(k.trim());
+  }
+  const out: SchemaSearchInput = { keywords };
+  if (typeof input.schema === "string" && input.schema.trim().length > 0) out.schema = input.schema.trim();
+  if (typeof input.maxTables === "number" && Number.isInteger(input.maxTables) && input.maxTables > 0) {
+    out.maxTables = Math.min(input.maxTables, 200);
+  }
+  return { ok: true, value: out };
+}
+
+function validateDecodeInput(input: unknown): Validated<{ value: string; encoding: string }> {
+  if (!isRecord(input)) return { ok: false, error: "input deve ser um objeto" };
+  if (typeof input.value !== "string" || input.value.length === 0) {
+    return { ok: false, error: "input.value deve ser uma string não vazia" };
+  }
+  if (typeof input.encoding !== "string" || input.encoding.length === 0) {
+    return { ok: false, error: "input.encoding deve ser 'hex', 'base64' ou 'url'" };
+  }
+  return { ok: true, value: { value: input.value, encoding: input.encoding } };
 }
