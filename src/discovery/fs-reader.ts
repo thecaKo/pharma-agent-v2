@@ -10,6 +10,7 @@ export interface FsEntry {
   name: string;
   isFile: boolean;
   isDirectory: boolean;
+  isSymbolicLink?: boolean;
   size?: number;
   mtime?: Date;
 }
@@ -58,6 +59,7 @@ export const nodeFileSystemReader: FileSystemReader = {
         name: dirent.name,
         isFile: dirent.isFile(),
         isDirectory: dirent.isDirectory(),
+        isSymbolicLink: dirent.isSymbolicLink(),
         size,
         mtime
       });

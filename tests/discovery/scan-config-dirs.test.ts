@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { probeScanConfigDirs, DEFAULT_PATTERNS } from "../../src/discovery/scan-config-dirs.js";
 import type { FileSystemReader, FsEntry } from "../../src/discovery/fs-reader.js";
 
+
 interface FsMap {
   [path: string]: FsEntry[] | "permission" | "missing";
 }
@@ -202,5 +203,35 @@ describe("probeScanConfigDirs", () => {
     expect(DEFAULT_PATTERNS).toContain("*.xml");
     expect(DEFAULT_PATTERNS).toContain("*.env");
     expect(DEFAULT_PATTERNS).toContain("*.db");
+  });
+
+  it("normaliza root com '..' e rejeita path que resolve para /proc", async () => {
+    const fs = makeFs({});
+    const r = await probeScanConfigDirs({ fs }, { roots: ["/tmp/../proc"] });
+    expect(r.rootsRejected).toEqual(["/tmp/../proc"]);
+    expect(r.files).toHaveLength(0);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("não segue symlink de diretório", async () => {
+    const symFs: FileSystemReader = {
+      readFile: vi.fn(async () => ""),
+      listDir: vi.fn(async () => []),
+      stat: vi.fn(async () => ({ isFile: false, isDirectory: true })),
+      enumerateTop: vi.fn(async (path: string) => {
+        if (path === "/home/user") {
+          return [
+            { name: "real", isFile: false, isDirectory: true, isSymbolicLink: false } as FsEntry,
+            { name: "link", isFile: false, isDirectory: true, isSymbolicLink: true } as FsEntry
+          ];
+        }
+        if (path === "/home/user/real") {
+          return [{ name: "app.ini", isFile: true, isDirectory: false, isSymbolicLink: false, size: 100 } as FsEntry];
+        }
+        return [];
+      })
+    };
+    const r = await probeScanConfigDirs({ fs: symFs }, { roots: ["/home/user"], maxDepth: 2 });
+    expect(r.files.map((f) => f.path)).toEqual(["/home/user/real/app.ini"]);
   });
 });

@@ -1,6 +1,5 @@
-import { resolve as pathResolve } from "node:path";
 import { isBinary } from "./fs-primitives.js";
-import { isDeniedRoot, isSecretDir, shouldSkipDir, joinPath, mapFsError, clamp } from "./fs-walk.js";
+import { mapFsError, clamp, walkDirs } from "./fs-walk.js";
 
 const DEFAULT_EXTENSIONS = ["ini", "conf", "config", "xml", "json", "env", "udl", "properties"];
 const DEFAULT_MAX_DEPTH = 3;
@@ -79,80 +78,60 @@ export async function fsGrep(input: FsGrepInput, ops: FsGrepOps): Promise<FsGrep
   let filesScanned = 0;
   let truncated = false;
 
-  const normalizedRoot = pathResolve(input.root);
-  if (isDeniedRoot(normalizedRoot)) {
-    return { matches, truncated: false, filesScanned: 0, errors: [{ path: input.root, reason: "permission" }] };
-  }
+  const walker = walkDirs(
+    [input.root],
+    { readdir: ops.readdir },
+    {
+      maxDepth,
+      onError: (path, err) => errors.push({ path, reason: mapFsError(err) }),
+      onRootRejected: () => errors.push({ path: input.root, reason: "permission" })
+    }
+  );
 
-  const stack: { path: string; depth: number }[] = [{ path: normalizedRoot, depth: 0 }];
+  for await (const { entry, fullPath } of walker) {
+    if (matches.length >= maxMatches || filesScanned >= maxFilesScanned) {
+      truncated = true;
+      break;
+    }
+    if (!entry.isFile) continue;
 
-  while (stack.length > 0 && matches.length < maxMatches && filesScanned < maxFilesScanned) {
-    const frame = stack.pop()!;
-    let dirents: Array<{ name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink?: boolean }>;
+    const ext = entry.name.includes(".") ? entry.name.split(".").pop()!.toLowerCase() : "";
+    if (!extensions.has(ext)) continue;
+
+    filesScanned++;
+    let read: { buffer: Buffer; truncated: boolean; totalSize: number };
     try {
-      dirents = await ops.readdir(frame.path);
+      read = await ops.readFileBytes(fullPath, maxFileBytes);
     } catch (err) {
-      errors.push({ path: frame.path, reason: mapFsError(err) });
+      errors.push({ path: fullPath, reason: mapFsError(err) });
       continue;
     }
 
-    for (const entry of dirents) {
-      if (matches.length >= maxMatches || filesScanned >= maxFilesScanned) {
-        truncated = true;
-        break;
-      }
-      const fullPath = joinPath(frame.path, entry.name);
-      if (entry.isSymbolicLink) continue;
-      if (entry.isDirectory) {
-        if (shouldSkipDir(entry.name)) continue;
-        if (isDeniedRoot(fullPath)) continue;
-        if (frame.depth + 1 < maxDepth) {
-          stack.push({ path: fullPath, depth: frame.depth + 1 });
-        }
-        continue;
-      }
-      if (!entry.isFile) continue;
+    if (isBinary(read.buffer)) continue;
 
-      const ext = entry.name.includes(".") ? entry.name.split(".").pop()!.toLowerCase() : "";
-      if (!extensions.has(ext)) continue;
+    if (read.truncated) {
+      truncatedFiles.push(fullPath);
+      truncated = true;
+    }
 
-      filesScanned++;
-      let read: { buffer: Buffer; truncated: boolean; totalSize: number };
-      try {
-        read = await ops.readFileBytes(fullPath, maxFileBytes);
-      } catch (err) {
-        errors.push({ path: fullPath, reason: mapFsError(err) });
-        continue;
-      }
-
-      if (isBinary(read.buffer)) continue;
-
-      if (read.truncated) {
-        truncatedFiles.push(fullPath);
-        truncated = true;
-      }
-
-      const text = read.buffer.toString("utf8");
-      const lines = text.split("\n");
-      for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
-        // trunca linha antes do matching para evitar ReDoS em linhas gigantes
-        const lineText = lines[i]!.length > MAX_LINE_BYTES ? lines[i]!.slice(0, MAX_LINE_BYTES) : lines[i]!;
-        re.lastIndex = 0;
-        const m = re.exec(lineText);
-        if (!m) continue;
-        matches.push({
-          path: fullPath,
-          line: i + 1,
-          column: m.index + 1,
-          text: lineText.length > TEXT_TRUNCATE_CHARS ? lineText.slice(0, TEXT_TRUNCATE_CHARS) : lineText
-        });
-      }
+    const text = read.buffer.toString("utf8");
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
+      // trunca linha antes do matching para evitar ReDoS em linhas gigantes
+      const lineText = lines[i]!.length > MAX_LINE_BYTES ? lines[i]!.slice(0, MAX_LINE_BYTES) : lines[i]!;
+      re.lastIndex = 0;
+      const m = re.exec(lineText);
+      if (!m) continue;
+      matches.push({
+        path: fullPath,
+        line: i + 1,
+        column: m.index + 1,
+        text: lineText.length > TEXT_TRUNCATE_CHARS ? lineText.slice(0, TEXT_TRUNCATE_CHARS) : lineText
+      });
     }
   }
 
-  if (stack.length > 0 || (matches.length >= maxMatches || filesScanned >= maxFilesScanned)) {
-    if (matches.length >= maxMatches || filesScanned >= maxFilesScanned) truncated = true;
-  }
+  if (matches.length >= maxMatches || filesScanned >= maxFilesScanned) truncated = true;
 
   return { matches, truncated, filesScanned, errors, ...(truncatedFiles.length > 0 ? { truncatedFiles } : {}) };
 }

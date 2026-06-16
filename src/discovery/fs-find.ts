@@ -1,5 +1,4 @@
-import { resolve as pathResolve } from "node:path";
-import { isDeniedRoot, shouldSkipDir, joinPath, mapFsError, compilePatterns, matchesAny, clamp } from "./fs-walk.js";
+import { mapFsError, compilePatterns, matchesAny, clamp, walkDirs } from "./fs-walk.js";
 
 const DEFAULT_MAX_DEPTH = 4;
 const DEFAULT_MAX_RESULTS = 100;
@@ -54,51 +53,30 @@ export async function fsFind(input: FsFindInput, ops: FsFindOps): Promise<FsFind
   for (const rawRoot of input.roots) {
     if (files.length >= maxResults) break;
 
-    const root = pathResolve(rawRoot);
-    if (isDeniedRoot(root)) {
-      rootsRejected.push(rawRoot);
-      continue;
-    }
-
-    const stack: { path: string; depth: number }[] = [{ path: root, depth: 0 }];
-
-    while (stack.length > 0 && files.length < maxResults) {
-      const frame = stack.pop()!;
-      let dirents: Array<{ name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink?: boolean; size?: number; mtimeMs?: number }>;
-      try {
-        dirents = await ops.readdir(frame.path);
-      } catch (err) {
-        errors.push({ path: frame.path, reason: mapFsError(err) });
-        continue;
+    const walker = walkDirs(
+      [rawRoot],
+      { readdir: ops.readdir },
+      {
+        maxDepth,
+        onError: (path, err) => errors.push({ path, reason: mapFsError(err) }),
+        onRootRejected: () => rootsRejected.push(rawRoot)
       }
+    );
 
-      for (const entry of dirents) {
-        if (files.length >= maxResults) {
-          truncated = true;
-          break;
-        }
-        if (entry.isSymbolicLink) continue;
-        const fullPath = joinPath(frame.path, entry.name);
-        if (entry.isDirectory) {
-          if (shouldSkipDir(entry.name)) continue;
-          if (isDeniedRoot(fullPath)) continue;
-          if (frame.depth + 1 < maxDepth) {
-            stack.push({ path: fullPath, depth: frame.depth + 1 });
-          }
-          continue;
-        }
-        if (!entry.isFile) continue;
-        if (!matchesAny(entry.name, patterns)) continue;
-
-        files.push({
-          path: fullPath,
-          size: entry.size ?? 0,
-          mtime: typeof entry.mtimeMs === "number" ? new Date(entry.mtimeMs).toISOString() : new Date(0).toISOString()
-        });
+    for await (const { entry, fullPath } of walker) {
+      if (files.length >= maxResults) {
+        truncated = true;
+        break;
       }
-    }
+      if (!entry.isFile) continue;
+      if (!matchesAny(entry.name, patterns)) continue;
 
-    if (stack.length > 0 && files.length >= maxResults) truncated = true;
+      files.push({
+        path: fullPath,
+        size: entry.size ?? 0,
+        mtime: typeof entry.mtimeMs === "number" ? new Date(entry.mtimeMs).toISOString() : new Date(0).toISOString()
+      });
+    }
   }
 
   return { files, truncated, rootsRejected, errors };

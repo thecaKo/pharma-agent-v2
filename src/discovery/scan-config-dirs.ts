@@ -1,14 +1,15 @@
-import type { FileSystemReader, FsEntry } from "./fs-reader.js";
+import type { FileSystemReader } from "./fs-reader.js";
 import {
   DENY_ROOT_REGEXES,
   isDeniedRoot,
-  shouldSkipDir,
   compilePatterns,
   matchesAny,
   expandEnv,
   mapFsError,
-  joinPath,
-  clamp
+  normalizePath,
+  clamp,
+  walkDirs,
+  type WalkOps
 } from "./fs-walk.js";
 
 export { DENY_ROOT_REGEXES };
@@ -84,56 +85,56 @@ export async function probeScanConfigDirs(
       continue;
     }
     const root = expansion;
-    if (isDeniedRoot(root)) {
+    // checa path original (Windows) E normalizado (desfaz "../" — ex.: /tmp/../proc → /proc)
+    if (isDeniedRoot(root) || isDeniedRoot(normalizePath(root))) {
       rootsRejected.push(rawRoot);
       continue;
     }
 
-    let initialEntries: FsEntry[];
-    try {
-      initialEntries = await ctx.fs.enumerateTop(root);
-    } catch (err) {
-      errors.push({ path: root, reason: mapFsError(err) });
-      continue;
-    }
+    const walkOps: WalkOps = {
+      readdir: (path) =>
+        ctx.fs.enumerateTop(path).then((entries) =>
+          entries.map((e) => ({
+            name: e.name,
+            isFile: e.isFile,
+            isDirectory: e.isDirectory,
+            isSymbolicLink: e.isSymbolicLink,
+            size: e.size,
+            mtimeMs: e.mtime?.getTime()
+          }))
+        )
+    };
 
-    const stack: { path: string; entries: FsEntry[]; depth: number }[] = [
-      { path: root, entries: initialEntries, depth: 0 }
-    ];
-    while (stack.length > 0) {
-      if (files.length >= maxFiles) break;
-      const frame = stack.pop();
-      if (!frame) break;
-      for (const entry of frame.entries) {
-        if (files.length >= maxFiles) {
-          truncated = true;
-          break;
-        }
-        const fullPath = joinPath(frame.path, entry.name);
-        if (entry.isFile) {
-          if (!matchesAny(entry.name, patternsRegex)) continue;
-          if (ageCutoff && entry.mtime && entry.mtime < ageCutoff) continue;
-          files.push({
-            path: fullPath,
-            size: entry.size ?? 0,
-            mtime: (entry.mtime ?? new Date(0)).toISOString()
-          });
-          if (files.length >= maxFiles) {
-            truncated = true;
-            break;
-          }
-          continue;
-        }
-        if (entry.isDirectory) {
-          if (shouldSkipDir(entry.name)) continue;
-          if (frame.depth + 1 >= maxDepth) continue;
-          try {
-            const childEntries = await ctx.fs.enumerateTop(fullPath);
-            stack.push({ path: fullPath, entries: childEntries, depth: frame.depth + 1 });
-          } catch (err) {
-            errors.push({ path: fullPath, reason: mapFsError(err) });
-          }
-        }
+    const walker = walkDirs(
+      [root],
+      walkOps,
+      {
+        maxDepth,
+        // deny-list já verificada acima para a raiz; skipRootNormalize evita que
+        // path.resolve estrague paths Windows quando executado em Linux (testes cross-plat)
+        skipRootNormalize: true,
+        onError: (path, err) => errors.push({ path, reason: mapFsError(err) }),
+        onRootRejected: () => rootsRejected.push(rawRoot)
+      }
+    );
+
+    for await (const { entry, fullPath } of walker) {
+      if (files.length >= maxFiles) {
+        truncated = true;
+        break;
+      }
+      if (!entry.isFile) continue;
+      if (!matchesAny(entry.name, patternsRegex)) continue;
+      const mtime = typeof entry.mtimeMs === "number" ? new Date(entry.mtimeMs) : undefined;
+      if (ageCutoff && mtime && mtime < ageCutoff) continue;
+      files.push({
+        path: fullPath,
+        size: entry.size ?? 0,
+        mtime: (mtime ?? new Date(0)).toISOString()
+      });
+      if (files.length >= maxFiles) {
+        truncated = true;
+        break;
       }
     }
   }

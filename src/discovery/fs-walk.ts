@@ -98,3 +98,75 @@ export function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, value));
 }
+
+export interface WalkDirent {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink?: boolean;
+  size?: number;
+  mtimeMs?: number;
+}
+
+export interface WalkOps {
+  readdir(path: string): Promise<WalkDirent[]>;
+}
+
+export interface WalkFrame {
+  path: string;
+  depth: number;
+}
+
+/**
+ * Gerador DFS blindado: bloqueia isDeniedRoot em cada dir,
+ * pula symlinks de diretório e shouldSkipDir; respeita maxDepth.
+ * skipRootNormalize=true quando o chamador já fez a checagem de deny-list
+ * (ex.: scan-config-dirs opera com paths Windows em ambiente Linux nos testes).
+ * Yields: { frame, entry, fullPath } para cada arquivo válido.
+ * Emite erro via onError para dirs inacessíveis.
+ */
+export async function* walkDirs(
+  roots: string[],
+  ops: WalkOps,
+  opts: {
+    maxDepth: number;
+    onError: (path: string, err: unknown) => void;
+    onRootRejected: (raw: string) => void;
+    skipRootNormalize?: boolean;
+  }
+): AsyncGenerator<{ frame: WalkFrame; entry: WalkDirent; fullPath: string }> {
+  for (const rawRoot of roots) {
+    const root = opts.skipRootNormalize ? rawRoot : normalizePath(rawRoot);
+    if (isDeniedRoot(root)) {
+      opts.onRootRejected(rawRoot);
+      continue;
+    }
+
+    const stack: WalkFrame[] = [{ path: root, depth: 0 }];
+
+    while (stack.length > 0) {
+      const frame = stack.pop()!;
+      let dirents: WalkDirent[];
+      try {
+        dirents = await ops.readdir(frame.path);
+      } catch (err) {
+        opts.onError(frame.path, err);
+        continue;
+      }
+
+      for (const entry of dirents) {
+        if (entry.isSymbolicLink) continue;
+        const fullPath = joinPath(frame.path, entry.name);
+        if (entry.isDirectory) {
+          if (shouldSkipDir(entry.name)) continue;
+          if (isDeniedRoot(fullPath)) continue;
+          if (frame.depth + 1 < opts.maxDepth) {
+            stack.push({ path: fullPath, depth: frame.depth + 1 });
+          }
+          continue;
+        }
+        yield { frame, entry, fullPath };
+      }
+    }
+  }
+}
